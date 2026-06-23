@@ -175,7 +175,7 @@ async def handle_successful_payment(bot: Bot, chat_id: int, order, order_repo: O
                 if resp.status == 200:
                     data = await resp.json()
                     session_id = data["session_id"]
-                    auth_url = f"{settings.AUTH_SERVER_URL}/auth/{session_id}"
+                    auth_url = settings.SITE_BASE_URL.replace("/view", f"/auth/{session_id}")
                     
                     text = (
                         "🎉 **Оплата успешно получена!**\n\n"
