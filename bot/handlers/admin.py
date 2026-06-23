@@ -2,6 +2,7 @@ from aiogram import Router, F, Bot
 from aiogram.types import CallbackQuery, Message
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
+from aiogram.filters import Command, CommandObject
 from bot.keyboards import inline
 from bot.db.repositories import UserRepository, OrderRepository, HostedSiteRepository
 from sqlalchemy import select, func
@@ -91,3 +92,69 @@ async def process_broadcast_message(message: Message, state: FSMContext, bot: Bo
         f"Не удалось отправить: {failed}",
         reply_markup=inline.get_admin_menu()
     )
+
+
+@router.message(Command("refund"))
+async def cmd_refund(message: Message, command: CommandObject, bot: Bot, user_repo: UserRepository, order_repo: OrderRepository, session):
+    """Admin command to refund a Telegram Stars payment using its charge ID."""
+    # Verify admin status
+    user = await user_repo.get_by_telegram_id(message.from_user.id)
+    if not user or not user.is_admin:
+        return
+
+    charge_id = command.args
+    if not charge_id:
+        await message.answer("⚠️ **Использование:** `/refund <payment_charge_id>`", parse_mode="Markdown")
+        return
+
+    try:
+        # Find order in DB by payment_id and method "stars"
+        order = await order_repo.get_by_payment_id(payment_id=charge_id, payment_method="stars")
+
+        if not order:
+            await message.answer(f"❌ Заказ с ID платежа `{charge_id}` не найден в базе данных.", parse_mode="Markdown")
+            return
+
+        if order.status == "refunded":
+            await message.answer("ℹ️ Этот платеж уже был возвращен ранее.")
+            return
+
+        if not order.user:
+            await message.answer("❌ Не удалось найти пользователя для этого заказа.", parse_mode="Markdown")
+            return
+
+        # Refund via Bot API
+        success = await bot.refund_star_payment(
+            user_id=order.user.telegram_id,
+            telegram_payment_charge_id=charge_id
+        )
+
+        if success:
+            # Update order status
+            order.status = "refunded"
+            await session.commit()
+
+            await message.answer(
+                f"✅ **Возврат средств успешно выполнен!**\n\n"
+                f"👤 Пользователь: `{order.user.telegram_id}`\n"
+                f"Сумма: `{order.amount_stars}` ⭐\n"
+                f"ID транзакции: `{charge_id}`",
+                parse_mode="Markdown"
+            )
+
+            # Notify user
+            try:
+                refund_notice = (
+                    f"💸 **Вам оформлен возврат средств!**\n\n"
+                    f"Администратор вернул вам `{order.amount_stars}` ⭐ за заказ `#{order.id}`.\n"
+                    f"Звезды зачислены обратно на ваш баланс Telegram."
+                )
+                await bot.send_message(chat_id=order.user.telegram_id, text=refund_notice, parse_mode="Markdown")
+            except Exception as notify_err:
+                logger.warning(f"Failed to notify user about refund: {notify_err}")
+        else:
+            await message.answer("❌ Telegram API вернул `False` при попытке возврата.")
+
+    except Exception as e:
+        logger.error(f"Error performing refund: {e}", exc_info=True)
+        await message.answer(f"❌ Ошибка выполнения возврата: {e}")
