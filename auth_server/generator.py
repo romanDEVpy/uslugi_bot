@@ -193,13 +193,21 @@ class GosuslugiWebLoader(GosuslugiLoader):
                             raise ValueError("Код авторизации не был предоставлен.")
                             
                         await on_progress("submitting_otp", "Отправка кода подтверждения...")
-                        await otp_input.fill(otp_code)
-                        await page.wait_for_timeout(500)
+                        # Focus and click first input, then type the code sequentially to support multi-box OTP forms
+                        await otp_input.focus()
+                        await otp_input.click()
+                        await page.wait_for_timeout(200)
+                        await page.keyboard.type(otp_code, delay=150)
+                        await page.wait_for_timeout(2000)
                         
-                        # Click verify/submit
-                        verify_button = page.locator("button[type='submit'], button:has-text('Подтвердить'), .button-big").first
-                        await verify_button.click()
-                        await page.wait_for_timeout(5000)
+                        # Click verify/submit if it is present and visible (some forms auto-submit, others don't)
+                        try:
+                            verify_button = page.locator("button[type='submit'], button:has-text('Подтвердить'), .button-big").first
+                            if await verify_button.is_visible():
+                                await verify_button.click()
+                                await page.wait_for_timeout(5000)
+                        except Exception as submit_err:
+                            logger.info(f"Verify button click skipped or failed: {submit_err}")
                         
                     except Exception as e:
                         logger.error(f"OTP submission failed: {e}")
