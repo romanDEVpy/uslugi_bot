@@ -233,7 +233,7 @@ class GosuslugiWebLoader(GosuslugiLoader):
                 # Check if there is an error message visible on the login page
                 error_msg = "Не удалось пройти авторизацию (возможно, неверный пароль или код 2FA)."
                 try:
-                    error_el = page.locator(".error-text, .alert-danger, .notification-item-error").first
+                    error_el = page.locator(".error-text, .alert-danger, .notification-item-error, .error-message, .error, esia-error, .esia-error-message").first
                     if await error_el.is_visible():
                         text = await error_el.inner_text()
                         if text:
