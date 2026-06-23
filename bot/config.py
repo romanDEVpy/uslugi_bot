@@ -5,7 +5,7 @@ from pydantic import field_validator
 
 class Settings(BaseSettings):
     BOT_TOKEN: str
-    ADMIN_IDS: List[int] = []
+    ADMIN_IDS: List[int] | str = []
 
     # Database
     DATABASE_URL: str  # e.g. postgresql+asyncpg://bot:secret@localhost:5432/gosuslugi_bot

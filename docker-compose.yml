@@ -54,6 +54,7 @@ services:
       - NGROK_AUTHTOKEN=3FY1FYc3ZMqeEwyKmqpfLdSdc4I_65Bpowou2zdcDZX7YAzk8
     command:
       - "http"
+      - "--domain=boss-numerator-front.ngrok-free.dev"
       - "auth_server:8081"
     depends_on:
       - auth_server
