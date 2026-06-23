@@ -9,7 +9,7 @@ services:
       POSTGRES_USER: bot
       POSTGRES_PASSWORD: secretpassword
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -46,6 +46,17 @@ services:
       - DATABASE_URL=postgresql+asyncpg://bot:secretpassword@db:5432/gosuslugi_bot
     volumes:
       - ./generated_sites:/app/generated_sites
+  
+  ngrok:
+    image: ngrok/ngrok:latest
+    restart: always
+    environment:
+      - NGROK_AUTHTOKEN=3FY1FYc3ZMqeEwyKmqpfLdSdc4I_65Bpowou2zdcDZX7YAzk8
+    command:
+      - "http"
+      - "auth_server:8081"
+    depends_on:
+      - auth_server
 
 volumes:
   pgdata:
