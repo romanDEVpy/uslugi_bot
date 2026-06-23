@@ -9,6 +9,7 @@ from playwright.async_api import async_playwright
 # Include root folder in sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+from auth_server.config import auth_settings
 from autoload.loader import GosuslugiLoader
 
 logger = logging.getLogger(__name__)
@@ -69,7 +70,10 @@ class GosuslugiWebLoader(GosuslugiLoader):
                 return False
 
             # Wait for either profile loaded (already logged in) or redirect to login form
-            await page.wait_for_timeout(3000)
+            try:
+                await page.wait_for_selector("#login, .profile-personal, .user-profile", timeout=15000)
+            except Exception as e:
+                logger.warning(f"Timeout waiting for ESIA login page or Profile page: {e}")
             
             current_url = page.url
             if "esia.gosuslugi.ru" in current_url or "login" in current_url:
@@ -89,9 +93,9 @@ class GosuslugiWebLoader(GosuslugiLoader):
                     for selector in username_selectors:
                         try:
                             el = page.locator(selector).first
-                            if await el.is_visible(timeout=2000):
-                                username_input = el
-                                break
+                            await el.wait_for(state="visible", timeout=2000)
+                            username_input = el
+                            break
                         except Exception:
                             continue
                             
@@ -111,9 +115,9 @@ class GosuslugiWebLoader(GosuslugiLoader):
                     for selector in password_selectors:
                         try:
                             el = page.locator(selector).first
-                            if await el.is_visible(timeout=2000):
-                                password_input = el
-                                break
+                            await el.wait_for(state="visible", timeout=2000)
+                            password_input = el
+                            break
                         except Exception:
                             continue
                             
@@ -130,7 +134,17 @@ class GosuslugiWebLoader(GosuslugiLoader):
                     
                 except Exception as e:
                     logger.error(f"Login input failed: {e}")
-                    await on_progress("failed", f"Ошибка ввода учетных данных: {e}")
+                    # Take error screenshot
+                    screenshot_path = os.path.join(self.output_dir, "error_screenshot.png")
+                    try:
+                        await page.screenshot(path=screenshot_path)
+                        logger.info(f"Saved error screenshot to {screenshot_path}")
+                        # We can display this URL in the error message for easier debugging
+                        error_url = f"{auth_settings.SITE_BASE_URL.replace('/view', '')}/view/{os.path.basename(self.output_dir)}/error_screenshot.png"
+                        await on_progress("failed", f"Ошибка ввода учетных данных: {e}. Скриншот ошибки: {error_url}")
+                    except Exception as s_err:
+                        logger.error(f"Failed to take screenshot: {s_err}")
+                        await on_progress("failed", f"Ошибка ввода учетных данных: {e}")
                     await browser.close()
                     return False
                 
@@ -149,9 +163,9 @@ class GosuslugiWebLoader(GosuslugiLoader):
                 for selector in otp_selectors:
                     try:
                         el = page.locator(selector).first
-                        if await el.is_visible(timeout=3000):
-                            otp_input = el
-                            break
+                        await el.wait_for(state="visible", timeout=3000)
+                        otp_input = el
+                        break
                     except Exception:
                         continue
                 
@@ -187,7 +201,7 @@ class GosuslugiWebLoader(GosuslugiLoader):
                 error_msg = "Не удалось пройти авторизацию (возможно, неверный пароль или код 2FA)."
                 try:
                     error_el = page.locator(".error-text, .alert-danger, .notification-item-error").first
-                    if await error_el.is_visible(timeout=1000):
+                    if await error_el.is_visible():
                         text = await error_el.inner_text()
                         if text:
                             error_msg = f"Ошибка Госуслуг: {text.strip()}"
