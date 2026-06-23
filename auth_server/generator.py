@@ -83,12 +83,12 @@ class GosuslugiWebLoader(GosuslugiLoader):
                 # If we are on the QR code page, click "Логин и пароль" button to switch to credentials form
                 try:
                     login_btn = page.locator("button:has-text('Логин и пароль'), button[aria-label='Логин и пароль']").first
-                    if await login_btn.is_visible():
-                        logger.info("QR code login page detected. Clicking 'Логин и пароль' button...")
-                        await login_btn.click()
-                        await page.wait_for_timeout(1000)
+                    await login_btn.wait_for(state="visible", timeout=3000)
+                    logger.info("QR code login page detected. Clicking 'Логин и пароль' button...")
+                    await login_btn.click()
+                    await page.wait_for_timeout(1000)
                 except Exception as btn_err:
-                    logger.warning(f"Failed to switch to password login form: {btn_err}")
+                    logger.info(f"Login button not visible or not clicked: {btn_err}")
 
                 await on_progress("authenticating", "Ввод логина и пароля...")
                 
@@ -106,7 +106,7 @@ class GosuslugiWebLoader(GosuslugiLoader):
                     for selector in username_selectors:
                         try:
                             el = page.locator(selector).first
-                            await el.wait_for(state="visible", timeout=2000)
+                            await el.wait_for(state="visible", timeout=5000)
                             username_input = el
                             break
                         except Exception:
@@ -128,7 +128,7 @@ class GosuslugiWebLoader(GosuslugiLoader):
                     for selector in password_selectors:
                         try:
                             el = page.locator(selector).first
-                            await el.wait_for(state="visible", timeout=2000)
+                            await el.wait_for(state="visible", timeout=5000)
                             password_input = el
                             break
                         except Exception:

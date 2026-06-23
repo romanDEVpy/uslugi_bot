@@ -163,6 +163,60 @@ async def generate_site_task(session_id: str, username: str, password: str, birt
                     logger.error(f"Failed to send error screenshot to admin {admin_id}: {admin_err}")
         except Exception as prep_err:
             logger.error(f"Error preparing screenshot for admins: {prep_err}")
+            
+    async def auto_refund_stars(order_id: int):
+        async with async_session_maker() as db_session:
+            order_repo = OrderRepository(db_session)
+            order = await order_repo.get_by_id(order_id)
+            if not order:
+                logger.error(f"Auto-refund failed: Order {order_id} not found.")
+                return False
+                
+            if order.payment_method != "stars":
+                logger.info(f"Auto-refund: Order {order_id} was paid via {order.payment_method}, skipping stars refund.")
+                return False
+                
+            if order.status in ["refunded", "pending_payment"]:
+                logger.info(f"Auto-refund: Order {order_id} has status {order.status}, skipping.")
+                return False
+                
+            if not order.payment_id:
+                logger.error(f"Auto-refund failed: Order {order_id} has no payment_id (charge ID).")
+                return False
+                
+            logger.info(f"Initiating auto-refund of {order.amount_stars} Stars for order {order_id} (user {order.user.telegram_id})...")
+            try:
+                success = await bot.refund_star_payment(
+                    user_id=order.user.telegram_id,
+                    telegram_payment_charge_id=order.payment_id
+                )
+                if success:
+                    order.status = "refunded"
+                    await db_session.commit()
+                    logger.info(f"Auto-refund succeeded for order {order_id}.")
+                    
+                    # Notify user about the refund
+                    try:
+                        refund_notice = (
+                            "💸 **Автоматический возврат средств**\n\n"
+                            "В связи с технической ошибкой при сборке вашего сайта, мы автоматически "
+                            f"вернули вам `{order.amount_stars}` ⭐ за заказ `#{order.id}`.\n"
+                            "Они уже зачислены обратно на ваш баланс Telegram."
+                        )
+                        await bot.send_message(
+                            chat_id=order.user.telegram_id,
+                            text=refund_notice,
+                            parse_mode="Markdown"
+                        )
+                    except Exception as notify_err:
+                        logger.warning(f"Failed to notify user about auto-refund: {notify_err}")
+                    return True
+                else:
+                    logger.error(f"Auto-refund failed: Telegram API returned False.")
+                    return False
+            except Exception as refund_err:
+                logger.error(f"Error executing auto-refund for order {order_id}: {refund_err}", exc_info=True)
+                return False
     
     try:
         # Check if this is an extension order
@@ -263,6 +317,7 @@ async def generate_site_task(session_id: str, username: str, password: str, birt
                 text="❌ Возникла ошибка при скачивании страниц. Попробуйте еще раз с другими учетными данными."
             )
             await send_screenshot_to_admins("Сбой генератора (неверные данные или таймаут)")
+            await auto_refund_stars(session_data["order_id"])
             
     except Exception as e:
         logger.error(f"Task generation error: {e}", exc_info=True)
@@ -278,6 +333,7 @@ async def generate_site_task(session_id: str, username: str, password: str, birt
             text=f"❌ Ошибка сборки сайта: {e}"
         )
         await send_screenshot_to_admins(str(e))
+        await auto_refund_stars(session_data["order_id"])
         
     finally:
         await bot.session.close()
