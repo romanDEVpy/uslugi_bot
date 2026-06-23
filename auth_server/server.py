@@ -1,0 +1,331 @@
+import os
+import sys
+import uuid
+import logging
+import asyncio
+from datetime import datetime, timedelta
+from aiohttp import web, WSMsgType
+from aiogram import Bot
+
+# Add root folder to sys.path
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+from auth_server.config import auth_settings
+from auth_server.generator import GosuslugiWebLoader
+from bot.db.engine import async_session_maker
+from bot.db.repositories import OrderRepository, HostedSiteRepository
+
+logger = logging.getLogger("auth_server")
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s'
+)
+
+# In-memory dictionary for active generation sessions
+# session_id -> { "order_id": int, "user_id": int, "telegram_id": int, "plan": str, "ws": WebSocket, "otp_future": Future }
+sessions = {}
+
+# Folder where sites are generated
+GENERATED_SITES_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), "generated_sites")
+)
+os.makedirs(GENERATED_SITES_DIR, exist_ok=True)
+
+# Templates directory
+TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), "templates", "auth_form.html")
+
+
+async def handle_api_generate(request):
+    """
+    POST /api/generate
+    Called by the Telegram bot to register a new generation session.
+    """
+    try:
+        data = await request.json()
+        order_id = data.get("order_id")
+        user_id = data.get("user_id")
+        telegram_id = data.get("telegram_id")
+        plan = data.get("plan")
+        
+        if not all([order_id, user_id, telegram_id, plan]):
+            return web.json_response({"error": "Missing parameters"}, status=400)
+            
+        session_id = str(uuid.uuid4())
+        sessions[session_id] = {
+            "order_id": order_id,
+            "user_id": user_id,
+            "telegram_id": telegram_id,
+            "plan": plan,
+            "ws": None,
+            "otp_future": None
+        }
+        
+        logger.info(f"Registered generation session {session_id} for order {order_id}")
+        return web.json_response({"session_id": session_id})
+        
+    except Exception as e:
+        logger.error(f"Error registering session: {e}", exc_info=True)
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_auth_page(request):
+    """
+    GET /auth/{session_id}
+    Renders the login web form to the user.
+    """
+    session_id = request.match_info.get("session_id")
+    if session_id not in sessions:
+        return web.Response(text="<h1>Сессия не найдена или истекла</h1>", content_type="text/html", status=404)
+        
+    try:
+        with open(TEMPLATE_PATH, "r", encoding="utf-8") as f:
+            html = f.read()
+        return web.Response(text=html, content_type="text/html")
+    except Exception as e:
+        logger.error(f"Error serving auth page: {e}")
+        return web.Response(text="Internal Server Error", status=500)
+
+
+async def generate_site_task(session_id: str, username: str, password: str, birth_date: str):
+    """Background task that runs Playwright, downloads pages and saves to DB."""
+    session_data = sessions.get(session_id)
+    if not session_data:
+        return
+        
+    site_uuid = str(uuid.uuid4())
+    output_dir = os.path.join(GENERATED_SITES_DIR, site_uuid)
+    
+    # Callback to send updates over websocket
+    async def on_progress(status: str, message: str):
+        ws = session_data.get("ws")
+        if ws and not ws.closed:
+            await ws.send_json({
+                "type": "progress",
+                "status": status,
+                "message": message
+            })
+            
+    # Callback to prompt user for 2FA / OTP code via websocket
+    async def get_otp_callback() -> str:
+        ws = session_data.get("ws")
+        if not ws or ws.closed:
+            raise ValueError("Клиент отключился во время ожидания 2FA.")
+            
+        # Create a future to await code submission
+        loop = asyncio.get_running_loop()
+        session_data["otp_future"] = loop.create_future()
+        
+        # Send OTP request message
+        await ws.send_json({"type": "otp_request"})
+        
+        # Wait with 90 seconds timeout
+        try:
+            code = await asyncio.wait_for(session_data["otp_future"], timeout=90.0)
+            return code
+        except asyncio.TimeoutError:
+            raise TimeoutError("Превышено время ожидания ввода СМС-кода (90 сек).")
+        finally:
+            session_data["otp_future"] = None
+
+    bot = Bot(token=auth_settings.BOT_TOKEN)
+    loader = GosuslugiWebLoader(output_dir=output_dir, birth_date=birth_date)
+    
+    try:
+        # Check if this is an extension order
+        # format: "extend_{plan}_{site_uuid}"
+        plan_str = session_data["plan"]
+        is_extension = plan_str.startswith("extend_")
+        
+        success = await loader.run_web(username, password, get_otp_callback, on_progress)
+        
+        if success:
+            # Determine expiration duration
+            # If extension, get the base plan: "day", "week", "month"
+            actual_plan = plan_str.split("_")[1] if is_extension else plan_str
+            duration_map = {
+                "day": timedelta(days=1),
+                "week": timedelta(weeks=1),
+                "month": timedelta(days=30)
+            }
+            duration = duration_map.get(actual_plan, timedelta(days=1))
+            
+            # Save info to DB
+            async with async_session_maker() as db_session:
+                order_repo = OrderRepository(db_session)
+                site_repo = HostedSiteRepository(db_session)
+                
+                expires_at = datetime.utcnow() + duration
+                public_url = f"{auth_settings.SITE_BASE_URL}/{site_uuid}/profile/personal.html"
+                
+                if is_extension:
+                    # Update existing site's expiration date
+                    target_uuid = plan_str.split("_")[2]
+                    extended_site = await site_repo.extend_expiration(target_uuid, duration)
+                    if extended_site:
+                        expires_at = extended_site.expires_at
+                        public_url = extended_site.public_url
+                        # Clean up the newly generated directory since we just extend the old one!
+                        if os.path.exists(output_dir):
+                            shutil = __import__("shutil")
+                            shutil.rmtree(output_dir)
+                    
+                    await order_repo.mark_as_ready(
+                        order_id=session_data["order_id"],
+                        site_uuid=target_uuid,
+                        site_url=public_url,
+                        expires_at=expires_at
+                    )
+                else:
+                    # Create hosted site record
+                    await site_repo.create(
+                        uuid=site_uuid,
+                        order_id=session_data["order_id"],
+                        user_id=session_data["user_id"],
+                        local_path=output_dir,
+                        public_url=public_url,
+                        expires_at=expires_at
+                    )
+                    
+                    await order_repo.mark_as_ready(
+                        order_id=session_data["order_id"],
+                        site_uuid=site_uuid,
+                        site_url=public_url,
+                        expires_at=expires_at
+                    )
+                
+                await db_session.commit()
+                
+            # Send Success status via WS
+            ws = session_data.get("ws")
+            if ws and not ws.closed:
+                await ws.send_json({
+                    "type": "completed",
+                    "site_url": public_url
+                })
+                
+            # Notify user via Bot
+            tg_msg = (
+                "🎉 **Сайт успешно создан!**\n\n"
+                f"Ваша оффлайн-копия Госуслуг доступна по ссылке:\n{public_url}\n\n"
+                f"Хостинг активен до: {expires_at.strftime('%d.%m.%Y %H:%M UTC')}"
+            )
+            await bot.send_message(
+                chat_id=session_data["telegram_id"],
+                text=tg_msg,
+                parse_mode="Markdown"
+            )
+            
+        else:
+            # Loader failed
+            ws = session_data.get("ws")
+            if ws and not ws.closed:
+                await ws.send_json({
+                    "type": "failed",
+                    "message": "Генератор вернул ошибку выполнения."
+                })
+            
+            await bot.send_message(
+                chat_id=session_data["telegram_id"],
+                text="❌ Возникла ошибка при скачивании страниц. Попробуйте еще раз с другими учетными данными."
+            )
+            
+    except Exception as e:
+        logger.error(f"Task generation error: {e}", exc_info=True)
+        ws = session_data.get("ws")
+        if ws and not ws.closed:
+            await ws.send_json({
+                "type": "failed",
+                "message": f"Критическая ошибка: {e}"
+            })
+            
+        await bot.send_message(
+            chat_id=session_data["telegram_id"],
+            text=f"❌ Ошибка сборки сайта: {e}"
+        )
+        
+    finally:
+        await bot.session.close()
+        # Remove from active sessions
+        sessions.pop(session_id, None)
+
+
+async def handle_websocket(request):
+    """
+    GET /ws/{session_id}
+    WebSocket endpoint for real-time interaction during login.
+    """
+    session_id = request.match_info.get("session_id")
+    if session_id not in sessions:
+        return web.Response(text="Unauthorized", status=401)
+        
+    ws = web.WebSocketResponse()
+    await ws.prepare(request)
+    
+    session_data = sessions[session_id]
+    session_data["ws"] = ws
+    
+    logger.info(f"WebSocket client connected for session {session_id}")
+    
+    try:
+        async for msg in ws:
+            if msg.type == WSMsgType.TEXT:
+                data = msg.json()
+                msg_type = data.get("type")
+                
+                if msg_type == "login":
+                    username = data.get("username")
+                    password = data.get("password")
+                    birth_date = data.get("birth_date")
+                    
+                    if not username or not password or not birth_date:
+                        await ws.send_json({"type": "failed", "message": "Заполните все поля формы"})
+                        continue
+                        
+                    # Start background generation task
+                    asyncio.create_task(
+                        generate_site_task(session_id, username, password, birth_date)
+                    )
+                    
+                elif msg_type == "otp_submit":
+                    code = data.get("code")
+                    otp_future = session_data.get("otp_future")
+                    
+                    if otp_future and not otp_future.done():
+                        otp_future.set_result(code)
+                        logger.info(f"Received OTP code via WebSocket for session {session_id}")
+                    else:
+                        logger.warning(f"OTP submitted but no future was waiting for it.")
+                        
+            elif msg.type == WSMsgType.ERROR:
+                logger.error(f"WS error: {ws.exception()}")
+                
+    finally:
+        logger.info(f"WebSocket client disconnected for session {session_id}")
+        if session_data.get("ws") == ws:
+            session_data["ws"] = None
+            
+    return ws
+
+
+async def init_app():
+    app = web.Application()
+    
+    # Register routes
+    app.router.add_post("/api/generate", handle_api_generate)
+    app.router.add_get("/auth/{session_id}", handle_auth_page)
+    app.router.add_get("/ws/{session_id}", handle_websocket)
+    
+    # Route for serving static generated websites
+    # URL format: /view/{site_uuid}/...
+    app.router.add_static("/view/", path=GENERATED_SITES_DIR, show_index=True)
+    
+    return app
+
+
+if __name__ == "__main__":
+    app = asyncio.run(init_app())
+    web.run_app(
+        app,
+        host=auth_settings.AUTH_SERVER_HOST,
+        port=auth_settings.AUTH_SERVER_PORT
+    )
