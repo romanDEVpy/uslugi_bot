@@ -1067,7 +1067,7 @@ class GosuslugiLoader:
     document.querySelectorAll('a').forEach(link => {{
         const href = link.getAttribute('href');
         if (href && !href.startsWith('#') && !href.startsWith('http')) {{
-            const cleanHref = href.split('#')[0].split('?')[0].replace(/\\.\\.\\/g, '').replace(/\\.\\/g, '');
+            const cleanHref = href.split('#')[0].split('?')[0].replace(/\\.\\.\\//g, '').replace(/\\.\\//g, '');
             if (cleanHref && currentLoc.endsWith(cleanHref)) {{
                 link.classList.add('active', 'selected');
                 const parent = link.closest('.sidebar-item, li, lk-menu-item');
