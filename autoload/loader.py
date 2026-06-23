@@ -998,20 +998,33 @@ class GosuslugiLoader:
     NAVIGATION_MAP.forEach(rule => {{
         if (currentPagePath === rule.page || currentPagePath.endsWith(rule.page)) {{
             document.addEventListener('click', (e) => {{
-                const card = e.target.closest(rule.selector);
+                const card = e.target.closest(rule.selector) || e.target.closest('.card-button, button.card-button');
                 if (card) {{
                     if (rule.titleContains) {{
-                        const titleEl = card.querySelector('.title-h4, .title-h3, h3, h4');
-                        if (!titleEl || !(titleEl.innerText || '').includes(rule.titleContains)) return;
+                        const cardText = card.innerText || card.textContent || '';
+                        if (!cardText.toLowerCase().includes(rule.titleContains.toLowerCase())) return;
                     }}
                     if (e.target.closest('.doc-card-actions-panel, lk-doc-action-share, lk-doc-action-copy')) return;
                     e.preventDefault();
-                    const currentDir = rule.page.substring(0, rule.page.lastIndexOf('/') + 1);
-                    let targetPath = rule.target;
-                    if (targetPath.startsWith(currentDir)) {{
-                        targetPath = targetPath.substring(currentDir.length);
+                    
+                    // Calculate absolute path relative to site root
+                    const pathname = window.location.pathname;
+                    let prefix = "/";
+                    const idx = pathname.indexOf(rule.page);
+                    if (idx !== -1) {{
+                        prefix = pathname.substring(0, idx);
+                    }} else {{
+                        const cleanRulePage = rule.page.replace(/\\.html$/, '');
+                        const idxClean = pathname.indexOf(cleanRulePage);
+                        if (idxClean !== -1) {{
+                            prefix = pathname.substring(0, idxClean);
+                        }}
                     }}
-                    window.location.href = targetPath;
+                    if (!prefix.endsWith('/')) {{
+                        prefix += '/';
+                    }}
+                    
+                    window.location.href = prefix + rule.target;
                 }}
             }});
         }}
@@ -1019,11 +1032,24 @@ class GosuslugiLoader:
 
     // Back button handling
     document.addEventListener('click', (e) => {{
-        const backBtn = e.target.closest('lib-back-button a, .back-button, a.back-link');
-        if (backBtn || (e.target.closest('a, button') && (e.target.closest('a, button').innerText || '').trim() === 'Назад')) {{
+        const backBtn = e.target.closest('.back-link, .back-button');
+        const isBackText = backBtn || (e.target.closest('a, button') && (e.target.closest('a, button').innerText || '').trim() === 'Назад');
+        const finalBackBtn = backBtn || (isBackText ? e.target.closest('a, button') : null);
+        if (finalBackBtn) {{
             e.preventDefault();
-            if (window.history.length > 1) {{
+            if (window.history.length > 1 && document.referrer && document.referrer.includes(window.location.host)) {{
                 window.history.back();
+            }} else {{
+                const pathname = window.location.pathname;
+                let prefix = "/";
+                const match = pathname.match(/^\\/(view\\/[^\\/]+\\/)/);
+                if (match) {{
+                    prefix = match[0];
+                }}
+                if (!prefix.endsWith('/')) {{
+                    prefix += '/';
+                }}
+                window.location.href = prefix + 'profile/personal.html';
             }}
         }}
     }});
