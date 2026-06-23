@@ -2,7 +2,7 @@ import os
 import shutil
 import logging
 from datetime import datetime
-from apscheduler.schedulers.asyncio import AsyncioScheduler
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from aiogram import Bot
 from bot.db.engine import async_session_maker
 from bot.db.repositories import HostedSiteRepository, OrderRepository
@@ -71,7 +71,7 @@ async def cleanup_expired_sites(bot: Bot):
 
 def start_scheduler(bot: Bot):
     """Starts the asyncio scheduler for cleanup task."""
-    scheduler = AsyncioScheduler()
+    scheduler = AsyncIOScheduler()
     # Run cleanup every 10 minutes
     scheduler.add_job(
         cleanup_expired_sites,
