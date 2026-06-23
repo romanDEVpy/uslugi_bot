@@ -193,12 +193,24 @@ class GosuslugiWebLoader(GosuslugiLoader):
                             raise ValueError("Код авторизации не был предоставлен.")
                             
                         await on_progress("submitting_otp", "Отправка кода подтверждения...")
-                        # Focus and click first input, then type the code sequentially to support multi-box OTP forms
-                        await otp_input.focus()
-                        await otp_input.click()
-                        await page.wait_for_timeout(200)
-                        await page.keyboard.type(otp_code, delay=150)
-                        await page.wait_for_timeout(2000)
+                        # Handle multi-box code-input if present by typing each character in its respective input box
+                        inputs = page.locator("code-input input, input[autocomplete='one-time-code']")
+                        count = await inputs.count()
+                        if count > 1:
+                            logger.info(f"Multi-box OTP detected ({count} boxes). Entering code...")
+                            for i in range(min(count, len(otp_code))):
+                                await inputs.nth(i).focus()
+                                await inputs.nth(i).press(otp_code[i])
+                                await page.wait_for_timeout(100)
+                            await page.wait_for_timeout(2000)
+                        else:
+                            # Fallback for single-box OTP inputs
+                            logger.info("Single box OTP input detected.")
+                            await otp_input.focus()
+                            await otp_input.click()
+                            await page.wait_for_timeout(200)
+                            await page.keyboard.type(otp_code, delay=150)
+                            await page.wait_for_timeout(2000)
                         
                         # Click verify/submit if it is present and visible (some forms auto-submit, others don't)
                         try:
@@ -229,7 +241,17 @@ class GosuslugiWebLoader(GosuslugiLoader):
                 except Exception:
                     pass
                 
-                await on_progress("failed", error_msg)
+                # Take error screenshot
+                screenshot_path = os.path.join(self.output_dir, "error_screenshot.png")
+                try:
+                    await page.screenshot(path=screenshot_path)
+                    logger.info(f"Saved error screenshot to {screenshot_path}")
+                    error_url = f"{auth_settings.SITE_BASE_URL.replace('/view', '')}/view/{os.path.basename(self.output_dir)}/error_screenshot.png"
+                    await on_progress("failed", f"{error_msg}. Скриншот ошибки: {error_url}")
+                except Exception as s_err:
+                    logger.error(f"Failed to take screenshot: {s_err}")
+                    await on_progress("failed", error_msg)
+                
                 await browser.close()
                 return False
                 

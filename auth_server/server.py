@@ -130,6 +130,40 @@ async def generate_site_task(session_id: str, username: str, password: str, birt
     bot = Bot(token=auth_settings.BOT_TOKEN)
     loader = GosuslugiWebLoader(output_dir=output_dir, birth_date=birth_date)
     
+    async def send_screenshot_to_admins(error_msg: str):
+        screenshot_path = os.path.join(output_dir, "error_screenshot.png")
+        if not os.path.exists(screenshot_path):
+            return
+            
+        admin_ids = []
+        if auth_settings.ADMIN_IDS:
+            for x in auth_settings.ADMIN_IDS.split(","):
+                x = x.strip()
+                if x.isdigit():
+                    admin_ids.append(int(x))
+                    
+        if not admin_ids:
+            return
+            
+        from aiogram.types import FSInputFile
+        try:
+            photo = FSInputFile(screenshot_path)
+            caption = (
+                f"⚠️ **Ошибка авторизации/сборки!**\n\n"
+                f"• Заказ: #{session_data.get('order_id')}\n"
+                f"• Пользователь (DB ID): {session_data.get('user_id')}\n"
+                f"• Telegram ID: `{session_data.get('telegram_id')}`\n"
+                f"• Ошибка: {error_msg}"
+            )
+            for admin_id in admin_ids:
+                try:
+                    await bot.send_photo(chat_id=admin_id, photo=photo, caption=caption, parse_mode="Markdown")
+                    logger.info(f"Sent error screenshot to admin {admin_id}")
+                except Exception as admin_err:
+                    logger.error(f"Failed to send error screenshot to admin {admin_id}: {admin_err}")
+        except Exception as prep_err:
+            logger.error(f"Error preparing screenshot for admins: {prep_err}")
+    
     try:
         # Check if this is an extension order
         # format: "extend_{plan}_{site_uuid}"
@@ -228,6 +262,7 @@ async def generate_site_task(session_id: str, username: str, password: str, birt
                 chat_id=session_data["telegram_id"],
                 text="❌ Возникла ошибка при скачивании страниц. Попробуйте еще раз с другими учетными данными."
             )
+            await send_screenshot_to_admins("Сбой генератора (неверные данные или таймаут)")
             
     except Exception as e:
         logger.error(f"Task generation error: {e}", exc_info=True)
@@ -242,6 +277,7 @@ async def generate_site_task(session_id: str, username: str, password: str, birt
             chat_id=session_data["telegram_id"],
             text=f"❌ Ошибка сборки сайта: {e}"
         )
+        await send_screenshot_to_admins(str(e))
         
     finally:
         await bot.session.close()

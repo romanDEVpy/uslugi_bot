@@ -11,6 +11,9 @@ class AuthServerSettings(BaseSettings):
     # Telegram Bot Token (used to notify user when generation succeeds/fails)
     BOT_TOKEN: str
     
+    # List of admin telegram IDs
+    ADMIN_IDS: str = ""
+    
     # Public base URL for site view
     SITE_BASE_URL: str = "http://localhost:8081/view"
 
