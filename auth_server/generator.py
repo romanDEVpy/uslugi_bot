@@ -71,12 +71,25 @@ class GosuslugiWebLoader(GosuslugiLoader):
 
             # Wait for either profile loaded (already logged in) or redirect to login form
             try:
-                await page.wait_for_selector("#login, .profile-personal, .user-profile", timeout=15000)
+                await page.wait_for_selector(
+                    "#login, .profile-personal, .user-profile, button:has-text('Логин и пароль'), button[aria-label='Логин и пароль']",
+                    timeout=15000
+                )
             except Exception as e:
                 logger.warning(f"Timeout waiting for ESIA login page or Profile page: {e}")
             
             current_url = page.url
             if "esia.gosuslugi.ru" in current_url or "login" in current_url:
+                # If we are on the QR code page, click "Логин и пароль" button to switch to credentials form
+                try:
+                    login_btn = page.locator("button:has-text('Логин и пароль'), button[aria-label='Логин и пароль']").first
+                    if await login_btn.is_visible():
+                        logger.info("QR code login page detected. Clicking 'Логин и пароль' button...")
+                        await login_btn.click()
+                        await page.wait_for_timeout(1000)
+                except Exception as btn_err:
+                    logger.warning(f"Failed to switch to password login form: {btn_err}")
+
                 await on_progress("authenticating", "Ввод логина и пароля...")
                 
                 try:
