@@ -227,6 +227,17 @@ class GosuslugiWebLoader(GosuslugiLoader):
                         await browser.close()
                         return False
 
+            # If we are still on the ESIA login subdomain, check for promotional/introductory pages and click "Пропустить" (Skip)
+            if "esia.gosuslugi.ru" in page.url or "login" in page.url:
+                try:
+                    skip_btn = page.locator("button:has-text('Пропустить'), button:has-text('Позже'), .plain-button-inline").first
+                    await skip_btn.wait_for(state="visible", timeout=4000)
+                    logger.info("Promotional/ad page detected. Clicking 'Пропустить'...")
+                    await skip_btn.click()
+                    await page.wait_for_timeout(3000)
+                except Exception as skip_err:
+                    logger.debug(f"No promotional skip button detected or timed out: {skip_err}")
+
             # Check if login succeeded (redirected to lk.gosuslugi.ru/profile/personal)
             await page.wait_for_timeout(3000)
             if "lk.gosuslugi.ru" not in page.url:
