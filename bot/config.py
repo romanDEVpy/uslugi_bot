@@ -40,7 +40,12 @@ class Settings(BaseSettings):
         if isinstance(v, str):
             if not v.strip():
                 return []
-            return [int(x.strip()) for x in v.split(",") if x.strip()]
+            res = []
+            for x in v.split(","):
+                cleaned = x.strip().strip("[]()'\" ")
+                if cleaned:
+                    res.append(int(cleaned))
+            return res
         if isinstance(v, int):
             return [v]
         return v
