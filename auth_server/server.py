@@ -85,7 +85,7 @@ async def handle_auth_page(request):
         return web.Response(text="Internal Server Error", status=500)
 
 
-async def generate_site_task(session_id: str, fio: str, birth_date: str):
+async def generate_site_task(session_id: str, fio: str, birth_date: str, gender: str):
     """Background task that copies the template and substitutes user data."""
     session_data = sessions.get(session_id)
     if not session_data:
@@ -108,7 +108,8 @@ async def generate_site_task(session_id: str, fio: str, birth_date: str):
     builder = TemplateSiteBuilder(
         output_dir=output_dir,
         fio=fio,
-        birth_date=birth_date
+        birth_date=birth_date,
+        gender=gender
     )
     
     async def auto_refund_stars(order_id: int):
@@ -312,14 +313,15 @@ async def handle_websocket(request):
                 if msg_type == "generate":
                     fio = data.get("fio", "").strip()
                     birth_date = data.get("birth_date", "").strip()
+                    gender = data.get("gender", "Мужской").strip()
                     
-                    if not fio or not birth_date:
+                    if not fio or not birth_date or not gender:
                         await ws.send_json({"type": "failed", "message": "Заполните все поля формы"})
                         continue
                         
                     # Start background generation task
                     asyncio.create_task(
-                        generate_site_task(session_id, fio, birth_date)
+                        generate_site_task(session_id, fio, birth_date, gender)
                     )
                         
             elif msg.type == WSMsgType.ERROR:

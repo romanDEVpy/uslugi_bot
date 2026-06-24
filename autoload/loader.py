@@ -222,6 +222,7 @@ class GosuslugiLoader:
         self.cookies_str = ""
         self.custom_fio = ""          # Пользовательское ФИО (ФАМИЛИЯ ИМЯ ОТЧЕСТВО)
         self.custom_birth_date = ""   # Пользовательская дата рождения
+        self.custom_gender = ""       # Пользовательский пол
         self.custom_passport = ""     # Рандомно сгенерированная серия/номер
         self.custom_issue_date = ""   # Дата выдачи паспорта (рождение + 14 лет + n дней)
         self.user_agent = (
@@ -375,7 +376,7 @@ class GosuslugiLoader:
            <div class="text-plain gray">Дата выдачи</div>
            <div class="text-plain mt-4">15.05.2025</div>  ← заменяется
         """
-        if not self.custom_birth_date and not self.custom_passport and not self.custom_fio:
+        if not self.custom_birth_date and not self.custom_passport and not self.custom_fio and not self.custom_gender:
             return
 
         logger.info("Подмена персональных данных в HTML-файлах...")
@@ -407,6 +408,21 @@ class GosuslugiLoader:
                                     page_info['local_name'], old_fio, self.custom_fio)
                         changes_made += 1
 
+                # ── Замена инициалов аватара ──
+                fio_parts = [p for p in self.custom_fio.split() if p]
+                if fio_parts:
+                    if len(fio_parts) >= 2:
+                        initials = fio_parts[0][0] + fio_parts[1][0]
+                    else:
+                        initials = fio_parts[0][0]
+                    initials = initials.upper()
+                    for avatar_div in soup.find_all('div', class_='no-avatar'):
+                        old_initials = avatar_div.get_text(strip=True)
+                        avatar_div.string = initials
+                        logger.info("  [%s] Инициалы аватара: %s → %s",
+                                    page_info['local_name'], old_initials, initials)
+                        changes_made += 1
+
             # ── Замена даты рождения ──
             if self.custom_birth_date:
                 # Ищем все элементы с текстом "Дата рождения"
@@ -429,6 +445,27 @@ class GosuslugiLoader:
                         value_div.string = self.custom_birth_date
                         logger.info("  [%s] Дата рождения: %s → %s",
                                     page_info['local_name'], old_date, self.custom_birth_date)
+                        changes_made += 1
+
+            # ── Замена пола ──
+            if self.custom_gender:
+                for label_div in soup.find_all(string=re.compile(r'^\s*Пол\s*$')):
+                    label_el = label_div.parent
+                    if not label_el:
+                        continue
+                    container = label_el.parent
+                    if not container:
+                        continue
+                    value_div = container.find(
+                        lambda tag: tag.name in ('div', 'p')
+                        and 'text-plain' in tag.get('class', [])
+                        and 'mt-4' in tag.get('class', [])
+                    )
+                    if value_div:
+                        old_gender = value_div.get_text(strip=True)
+                        value_div.string = self.custom_gender
+                        logger.info("  [%s] Пол: %s → %s",
+                                    page_info['local_name'], old_gender, self.custom_gender)
                         changes_made += 1
 
             # ── Замена серии/номера паспорта ──

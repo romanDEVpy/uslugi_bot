@@ -23,10 +23,11 @@ class TemplateSiteBuilder(GosuslugiLoader):
     пользовательские данные (ФИО + дата рождения).
     Не использует Playwright и не требует авторизации.
     """
-    def __init__(self, output_dir: str, fio: str, birth_date: str):
+    def __init__(self, output_dir: str, fio: str, birth_date: str, gender: str):
         super().__init__(output_dir=output_dir)
         self.custom_fio = fio.upper().strip()
         self.custom_birth_date = birth_date.strip()
+        self.custom_gender = gender.strip()
         self.custom_passport = self._generate_passport_number()
         self.custom_issue_date = self._generate_issue_date(self.custom_birth_date)
 
