@@ -31,10 +31,34 @@ async def choose_plan(callback: CallbackQuery):
 
 
 @router.callback_query(F.data.startswith("plan_"))
-async def choose_payment_method(callback: CallbackQuery):
+async def choose_payment_method(callback: CallbackQuery, bot: Bot, user_repo: UserRepository, order_repo: OrderRepository):
     await callback.answer()
     plan = callback.data.split("_")[1]
     
+    user = await user_repo.get_or_create(
+        telegram_id=callback.from_user.id,
+        first_name=callback.from_user.first_name,
+        username=callback.from_user.username
+    )
+    
+    # Check if admin
+    is_admin = callback.from_user.id in settings.ADMIN_IDS or user.is_admin
+    
+    if is_admin:
+        order = await order_repo.create(
+            user_id=user.id,
+            plan=plan,
+            payment_method="admin_free"
+        )
+        await order_repo.mark_as_paid(order.id)
+        
+        await callback.message.edit_text(
+            text="⏳ **Вы являетесь администратором.** Создаем бесплатный заказ и запускаем генерацию...",
+            parse_mode="Markdown"
+        )
+        await handle_successful_payment(bot, callback.message.chat.id, order, order_repo)
+        return
+        
     plan_names = {"day": "1 День", "week": "1 Неделя", "month": "1 Месяц"}
     text = (
         f"🛒 Выбран тариф: **{plan_names.get(plan, plan)}**\n\n"

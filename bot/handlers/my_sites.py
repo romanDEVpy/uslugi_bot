@@ -4,6 +4,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from bot.keyboards import inline
 from bot.db.repositories import UserRepository, HostedSiteRepository, OrderRepository
 from bot.config import settings
+from bot.handlers.generate import handle_successful_payment
 from bot.payments.stars import send_stars_invoice
 from bot.payments.cryptobot import cryptobot
 from datetime import datetime
@@ -82,12 +83,41 @@ async def extend_site_choose_plan(callback: CallbackQuery):
 
 
 @router.callback_query(F.data.startswith("extplan_"))
-async def extend_site_choose_payment(callback: CallbackQuery):
+async def extend_site_choose_payment(
+    callback: CallbackQuery,
+    bot: Bot,
+    user_repo: UserRepository,
+    order_repo: OrderRepository
+):
     await callback.answer()
     parts = callback.data.split("_")
     plan = parts[1]
     site_uuid = parts[2]
     
+    user = await user_repo.get_or_create(
+        telegram_id=callback.from_user.id,
+        first_name=callback.from_user.first_name,
+        username=callback.from_user.username
+    )
+    
+    # Check if admin
+    is_admin = callback.from_user.id in settings.ADMIN_IDS or user.is_admin
+    
+    if is_admin:
+        order = await order_repo.create(
+            user_id=user.id,
+            plan=f"extend_{plan}_{site_uuid}",
+            payment_method="admin_free"
+        )
+        await order_repo.mark_as_paid(order.id)
+        
+        await callback.message.edit_text(
+            text="⏳ **Вы являетесь администратором.** Продлеваем хостинг бесплатно...",
+            parse_mode="Markdown"
+        )
+        await handle_successful_payment(bot, callback.message.chat.id, order, order_repo)
+        return
+        
     builder = InlineKeyboardBuilder()
     builder.button(text="⭐ Telegram Stars", callback_data=f"extpay_stars_{plan}_{site_uuid}")
     builder.button(text="🪙 CryptoBot", callback_data=f"extpay_crypto_{plan}_{site_uuid}")
