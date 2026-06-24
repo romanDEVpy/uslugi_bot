@@ -11,7 +11,7 @@ from aiogram import Bot
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from auth_server.config import auth_settings
-from auth_server.generator import GosuslugiWebLoader
+from auth_server.generator import TemplateSiteBuilder
 from bot.db.engine import async_session_maker
 from bot.db.repositories import OrderRepository, HostedSiteRepository
 
@@ -22,7 +22,7 @@ logging.basicConfig(
 )
 
 # In-memory dictionary for active generation sessions
-# session_id -> { "order_id": int, "user_id": int, "telegram_id": int, "plan": str, "ws": WebSocket, "otp_future": Future }
+# session_id -> { "order_id": int, "user_id": int, "telegram_id": int, "plan": str, "ws": WebSocket }
 sessions = {}
 
 # Folder where sites are generated
@@ -57,7 +57,6 @@ async def handle_api_generate(request):
             "telegram_id": telegram_id,
             "plan": plan,
             "ws": None,
-            "otp_future": None
         }
         
         logger.info(f"Registered generation session {session_id} for order {order_id}")
@@ -71,7 +70,7 @@ async def handle_api_generate(request):
 async def handle_auth_page(request):
     """
     GET /auth/{session_id}
-    Renders the login web form to the user.
+    Renders the data input form to the user.
     """
     session_id = request.match_info.get("session_id")
     if session_id not in sessions:
@@ -86,8 +85,8 @@ async def handle_auth_page(request):
         return web.Response(text="Internal Server Error", status=500)
 
 
-async def generate_site_task(session_id: str, username: str, password: str, birth_date: str):
-    """Background task that runs Playwright, downloads pages and saves to DB."""
+async def generate_site_task(session_id: str, fio: str, birth_date: str):
+    """Background task that copies the template and substitutes user data."""
     session_data = sessions.get(session_id)
     if not session_data:
         return
@@ -104,66 +103,14 @@ async def generate_site_task(session_id: str, username: str, password: str, birt
                 "status": status,
                 "message": message
             })
-            
-    # Callback to prompt user for 2FA / OTP code via websocket
-    async def get_otp_callback() -> str:
-        ws = session_data.get("ws")
-        if not ws or ws.closed:
-            raise ValueError("Клиент отключился во время ожидания 2FA.")
-            
-        # Create a future to await code submission
-        loop = asyncio.get_running_loop()
-        session_data["otp_future"] = loop.create_future()
-        
-        # Send OTP request message
-        await ws.send_json({"type": "otp_request"})
-        
-        # Wait with 90 seconds timeout
-        try:
-            code = await asyncio.wait_for(session_data["otp_future"], timeout=90.0)
-            return code
-        except asyncio.TimeoutError:
-            raise TimeoutError("Превышено время ожидания ввода СМС-кода (90 сек).")
-        finally:
-            session_data["otp_future"] = None
 
     bot = Bot(token=auth_settings.BOT_TOKEN)
-    loader = GosuslugiWebLoader(output_dir=output_dir, birth_date=birth_date)
+    builder = TemplateSiteBuilder(
+        output_dir=output_dir,
+        fio=fio,
+        birth_date=birth_date
+    )
     
-    async def send_screenshot_to_admins(error_msg: str):
-        screenshot_path = os.path.join(output_dir, "error_screenshot.png")
-        if not os.path.exists(screenshot_path):
-            return
-            
-        admin_ids = []
-        if auth_settings.ADMIN_IDS:
-            for x in auth_settings.ADMIN_IDS.split(","):
-                x = x.strip()
-                if x.isdigit():
-                    admin_ids.append(int(x))
-                    
-        if not admin_ids:
-            return
-            
-        from aiogram.types import FSInputFile
-        try:
-            photo = FSInputFile(screenshot_path)
-            caption = (
-                f"⚠️ **Ошибка авторизации/сборки!**\n\n"
-                f"• Заказ: #{session_data.get('order_id')}\n"
-                f"• Пользователь (DB ID): {session_data.get('user_id')}\n"
-                f"• Telegram ID: `{session_data.get('telegram_id')}`\n"
-                f"• Ошибка: {error_msg}"
-            )
-            for admin_id in admin_ids:
-                try:
-                    await bot.send_photo(chat_id=admin_id, photo=photo, caption=caption, parse_mode="Markdown")
-                    logger.info(f"Sent error screenshot to admin {admin_id}")
-                except Exception as admin_err:
-                    logger.error(f"Failed to send error screenshot to admin {admin_id}: {admin_err}")
-        except Exception as prep_err:
-            logger.error(f"Error preparing screenshot for admins: {prep_err}")
-            
     async def auto_refund_stars(order_id: int):
         async with async_session_maker() as db_session:
             order_repo = OrderRepository(db_session)
@@ -224,7 +171,7 @@ async def generate_site_task(session_id: str, username: str, password: str, birt
         plan_str = session_data["plan"]
         is_extension = plan_str.startswith("extend_")
         
-        success = await loader.run_web(username, password, get_otp_callback, on_progress)
+        success = await builder.build(on_progress=on_progress)
         
         if success:
             # Determine expiration duration
@@ -254,7 +201,7 @@ async def generate_site_task(session_id: str, username: str, password: str, birt
                         public_url = extended_site.public_url
                         # Clean up the newly generated directory since we just extend the old one!
                         if os.path.exists(output_dir):
-                            shutil = __import__("shutil")
+                            import shutil
                             shutil.rmtree(output_dir)
                     
                     await order_repo.mark_as_ready(
@@ -304,7 +251,7 @@ async def generate_site_task(session_id: str, username: str, password: str, birt
             )
             
         else:
-            # Loader failed
+            # Builder failed
             ws = session_data.get("ws")
             if ws and not ws.closed:
                 await ws.send_json({
@@ -314,9 +261,8 @@ async def generate_site_task(session_id: str, username: str, password: str, birt
             
             await bot.send_message(
                 chat_id=session_data["telegram_id"],
-                text="❌ Возникла ошибка при скачивании страниц. Попробуйте еще раз с другими учетными данными."
+                text="❌ Возникла ошибка при генерации сайта. Попробуйте ещё раз."
             )
-            await send_screenshot_to_admins("Сбой генератора (неверные данные или таймаут)")
             await auto_refund_stars(session_data["order_id"])
             
     except Exception as e:
@@ -332,7 +278,6 @@ async def generate_site_task(session_id: str, username: str, password: str, birt
             chat_id=session_data["telegram_id"],
             text=f"❌ Ошибка сборки сайта: {e}"
         )
-        await send_screenshot_to_admins(str(e))
         await auto_refund_stars(session_data["order_id"])
         
     finally:
@@ -344,7 +289,7 @@ async def generate_site_task(session_id: str, username: str, password: str, birt
 async def handle_websocket(request):
     """
     GET /ws/{session_id}
-    WebSocket endpoint for real-time interaction during login.
+    WebSocket endpoint for real-time interaction during generation.
     """
     session_id = request.match_info.get("session_id")
     if session_id not in sessions:
@@ -364,29 +309,18 @@ async def handle_websocket(request):
                 data = msg.json()
                 msg_type = data.get("type")
                 
-                if msg_type == "login":
-                    username = data.get("username")
-                    password = data.get("password")
-                    birth_date = data.get("birth_date")
+                if msg_type == "generate":
+                    fio = data.get("fio", "").strip()
+                    birth_date = data.get("birth_date", "").strip()
                     
-                    if not username or not password or not birth_date:
+                    if not fio or not birth_date:
                         await ws.send_json({"type": "failed", "message": "Заполните все поля формы"})
                         continue
                         
                     # Start background generation task
                     asyncio.create_task(
-                        generate_site_task(session_id, username, password, birth_date)
+                        generate_site_task(session_id, fio, birth_date)
                     )
-                    
-                elif msg_type == "otp_submit":
-                    code = data.get("code")
-                    otp_future = session_data.get("otp_future")
-                    
-                    if otp_future and not otp_future.done():
-                        otp_future.set_result(code)
-                        logger.info(f"Received OTP code via WebSocket for session {session_id}")
-                    else:
-                        logger.warning(f"OTP submitted but no future was waiting for it.")
                         
             elif msg.type == WSMsgType.ERROR:
                 logger.error(f"WS error: {ws.exception()}")

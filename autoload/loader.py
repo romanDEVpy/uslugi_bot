@@ -1,5 +1,6 @@
 """
 Основной модуль загрузчика: авторизация → загрузка двух страниц → объединение.
+Также используется как шаблонный движок для подмены данных.
 """
 
 import os
@@ -7,6 +8,8 @@ import re
 import asyncio
 import logging
 import random
+import shutil
+from datetime import datetime, timedelta
 from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
@@ -217,8 +220,10 @@ class GosuslugiLoader:
         self.downloaded_assets = set()
         self.aiohttp_session = None
         self.cookies_str = ""
+        self.custom_fio = ""          # Пользовательское ФИО (ФАМИЛИЯ ИМЯ ОТЧЕСТВО)
         self.custom_birth_date = ""   # Пользовательская дата рождения
         self.custom_passport = ""     # Рандомно сгенерированная серия/номер
+        self.custom_issue_date = ""   # Дата выдачи паспорта (рождение + 14 лет + n дней)
         self.user_agent = (
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
             'AppleWebKit/537.36 (KHTML, like Gecko) '
@@ -303,6 +308,20 @@ class GosuslugiLoader:
         number = random.randint(100000, 999999)
         return f"{series} {number:06d}"
 
+    @staticmethod
+    def _generate_issue_date(birth_date_str: str) -> str:
+        """
+        Генерирует дату выдачи паспорта: дата рождения + 14 лет + random(1, 60) дней.
+        """
+        birth = datetime.strptime(birth_date_str, "%d.%m.%Y")
+        try:
+            at_14 = birth.replace(year=birth.year + 14)
+        except ValueError:
+            # 29 февраля → 28 февраля
+            at_14 = birth.replace(year=birth.year + 14, day=28)
+        issue = at_14 + timedelta(days=random.randint(1, 60))
+        return issue.strftime("%d.%m.%Y")
+
     def _prompt_custom_data(self):
         """
         Запрашивает у пользователя дату рождения и генерирует рандомный номер паспорта.
@@ -322,31 +341,41 @@ class GosuslugiLoader:
             else:
                 print("    Неверный формат! Используйте ДД.ММ.ГГГГ (например: 15.03.2005)")
 
-        # Генерация паспорта
+        # Генерация паспорта и даты выдачи
         self.custom_passport = self._generate_passport_number()
+        self.custom_issue_date = self._generate_issue_date(self.custom_birth_date)
 
         logger.info("")
         logger.info("  Дата рождения: %s", self.custom_birth_date)
         logger.info("  Паспорт (сгенерирован): %s", self.custom_passport)
+        logger.info("  Дата выдачи (сгенерирована): %s", self.custom_issue_date)
         logger.info("")
 
     def _apply_custom_data(self):
         """
-        Подменяет дату рождения и серию/номер паспорта в загруженных HTML-файлах.
+        Подменяет ФИО, дату рождения, серию/номер паспорта и дату выдачи
+        в загруженных HTML-файлах.
         
         Элементы для замены:
-        1. Дата рождения (id-doc.html):
+        1. ФИО (id-doc.html):
+           <p class="title-h4">МЕДВЕДЕВ РОМАН КОНСТАНТИНОВИЧ</p>  ← заменяется
+        
+        2. Дата рождения (id-doc.html):
            <div class="text-plain gray">Дата рождения</div>
            <div class="text-plain mt-4">25.02.2008</div>  ← заменяется
         
-        2. Серия/номер паспорта (personal.html):
+        3. Серия/номер паспорта (personal.html):
            <p class="title-h5">4625 039329</p>  ← заменяется
         
-        3. Серия/номер паспорта (id-doc.html):
+        4. Серия/номер паспорта (id-doc.html):
            <div class="text-help">Серия и номер паспорта</div>
            <p class="title-h4 mt-4">4625 039329</p>  ← заменяется
+
+        5. Дата выдачи (personal.html, id-doc.html):
+           <div class="text-plain gray">Дата выдачи</div>
+           <div class="text-plain mt-4">15.05.2025</div>  ← заменяется
         """
-        if not self.custom_birth_date and not self.custom_passport:
+        if not self.custom_birth_date and not self.custom_passport and not self.custom_fio:
             return
 
         logger.info("Подмена персональных данных в HTML-файлах...")
@@ -365,6 +394,18 @@ class GosuslugiLoader:
 
             soup = BeautifulSoup(html, 'lxml')
             changes_made = 0
+
+            # ── Замена ФИО ──
+            if self.custom_fio:
+                # ФИО в id-doc.html: <p class="title-h4"> внутри div.user-info
+                for user_info_div in soup.find_all('div', class_='user-info'):
+                    fio_tag = user_info_div.find('p', class_='title-h4')
+                    if fio_tag:
+                        old_fio = fio_tag.get_text(strip=True)
+                        fio_tag.string = self.custom_fio
+                        logger.info("  [%s] ФИО: %s → %s",
+                                    page_info['local_name'], old_fio, self.custom_fio)
+                        changes_made += 1
 
             # ── Замена даты рождения ──
             if self.custom_birth_date:
@@ -419,6 +460,27 @@ class GosuslugiLoader:
                         value_p.string = self.custom_passport
                         logger.info("  [%s] Паспорт (title-h4): %s → %s",
                                     page_info['local_name'], old_passport, self.custom_passport)
+                        changes_made += 1
+
+            # ── Замена даты выдачи ──
+            if self.custom_issue_date:
+                for label_div in soup.find_all(string=re.compile(r'Дата выдачи')):
+                    label_el = label_div.parent
+                    if not label_el:
+                        continue
+                    container = label_el.parent
+                    if not container:
+                        continue
+                    value_div = container.find(
+                        lambda tag: tag.name in ('div', 'p')
+                        and 'text-plain' in tag.get('class', [])
+                        and 'mt-4' in tag.get('class', [])
+                    )
+                    if value_div and re.match(r'\d{2}\.\d{2}\.\d{4}', value_div.get_text(strip=True)):
+                        old_date = value_div.get_text(strip=True)
+                        value_div.string = self.custom_issue_date
+                        logger.info("  [%s] Дата выдачи: %s → %s",
+                                    page_info['local_name'], old_date, self.custom_issue_date)
                         changes_made += 1
 
             # Сохраняем если были изменения
