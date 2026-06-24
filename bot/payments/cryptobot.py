@@ -56,7 +56,9 @@ class CryptoBotHelper:
         try:
             invoices = await self.crypto.get_invoices(invoice_ids=int(invoice_id))
             if invoices:
-                return invoices[0].status
+                if isinstance(invoices, list):
+                    return invoices[0].status
+                return invoices.status
             return "not_found"
         except Exception as e:
             logger.error(f"Error checking CryptoBot invoice {invoice_id}: {e}")
