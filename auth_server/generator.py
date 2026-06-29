@@ -30,6 +30,8 @@ class TemplateSiteBuilder(GosuslugiLoader):
         self.custom_gender = gender.strip()
         self.custom_passport = self._generate_passport_number()
         self.custom_issue_date = self._generate_issue_date(self.custom_birth_date)
+        self.custom_inn = self._generate_inn()
+        self.custom_snils = self._generate_snils()
 
     async def build(self, on_progress=None):
         """
@@ -71,7 +73,9 @@ class TemplateSiteBuilder(GosuslugiLoader):
             f"Подмена данных: ФИО={self.custom_fio}, "
             f"ДР={self.custom_birth_date}, "
             f"Паспорт={self.custom_passport}, "
-            f"Дата выдачи={self.custom_issue_date}"
+            f"Дата выдачи={self.custom_issue_date}, "
+            f"ИНН={self.custom_inn}, "
+            f"СНИЛС={self.custom_snils}"
         )
         self._apply_custom_data()
 

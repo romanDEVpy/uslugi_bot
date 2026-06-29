@@ -225,6 +225,8 @@ class GosuslugiLoader:
         self.custom_gender = ""       # Пользовательский пол
         self.custom_passport = ""     # Рандомно сгенерированная серия/номер
         self.custom_issue_date = ""   # Дата выдачи паспорта (рождение + 14 лет + n дней)
+        self.custom_inn = ""          # Рандомно сгенерированный ИНН (12 цифр)
+        self.custom_snils = ""         # Рандомно сгенерированный СНИЛС (XXX-XXX-XXX YY)
         self.user_agent = (
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
             'AppleWebKit/537.36 (KHTML, like Gecko) '
@@ -323,6 +325,61 @@ class GosuslugiLoader:
         issue = at_14 + timedelta(days=random.randint(1, 60))
         return issue.strftime("%d.%m.%Y")
 
+    @staticmethod
+    def _generate_inn() -> str:
+        """
+        Генерирует валидный 12-значный ИНН для физического лица.
+        """
+        region = f"{random.randint(1, 99):02d}"
+        tax_office = f"{random.randint(1, 99):02d}"
+        record = f"{random.randint(100000, 999999):06d}"
+        digits = [int(d) for d in (region + tax_office + record)]
+        
+        # 11-й контрольный разряд
+        weights11 = [7, 2, 4, 10, 3, 5, 9, 4, 6, 8]
+        val11 = sum(d * w for d, w in zip(digits, weights11)) % 11
+        d11 = 0 if val11 == 10 else val11
+        digits.append(d11)
+        
+        # 12-й контрольный разряд
+        weights12 = [3, 7, 2, 4, 10, 3, 5, 9, 4, 6, 8]
+        val12 = sum(d * w for d, w in zip(digits, weights12)) % 11
+        d12 = 0 if val12 == 10 else val12
+        digits.append(d12)
+        
+        return "".join(str(d) for d in digits)
+
+    @staticmethod
+    def _generate_snils() -> str:
+        """
+        Генерирует валидный СНИЛС в формате 'XXX-XXX-XXX YY'.
+        """
+        d1 = random.randint(0, 9)
+        d2 = random.randint(0, 9)
+        d3 = random.randint(0, 9)
+        if d1 == 0 and d2 == 0 and d3 == 0:
+            d3 = 1
+        
+        digits = [d1, d2, d3] + [random.randint(0, 9) for _ in range(6)]
+        
+        s = 0
+        for i in range(9):
+            s += digits[i] * (9 - i)
+        
+        if s < 100:
+            checksum = s
+        elif s == 100 or s == 101:
+            checksum = 0
+        else:
+            rem = s % 101
+            if rem == 100 or rem == 101:
+                checksum = 0
+            else:
+                checksum = rem
+                
+        snils_str = "".join(str(d) for d in digits)
+        return f"{snils_str[:3]}-{snils_str[3:6]}-{snils_str[6:9]} {checksum:02d}"
+
     def _prompt_custom_data(self):
         """
         Запрашивает у пользователя дату рождения и генерирует рандомный номер паспорта.
@@ -342,14 +399,18 @@ class GosuslugiLoader:
             else:
                 print("    Неверный формат! Используйте ДД.ММ.ГГГГ (например: 15.03.2005)")
 
-        # Генерация паспорта и даты выдачи
+        # Генерация паспорта, даты выдачи, ИНН и СНИЛС
         self.custom_passport = self._generate_passport_number()
         self.custom_issue_date = self._generate_issue_date(self.custom_birth_date)
+        self.custom_inn = self._generate_inn()
+        self.custom_snils = self._generate_snils()
 
         logger.info("")
         logger.info("  Дата рождения: %s", self.custom_birth_date)
         logger.info("  Паспорт (сгенерирован): %s", self.custom_passport)
         logger.info("  Дата выдачи (сгенерирована): %s", self.custom_issue_date)
+        logger.info("  ИНН (сгенерирован): %s", self.custom_inn)
+        logger.info("  СНИЛС (сгенерирован): %s", self.custom_snils)
         logger.info("")
 
     def _apply_custom_data(self):
@@ -376,7 +437,7 @@ class GosuslugiLoader:
            <div class="text-plain gray">Дата выдачи</div>
            <div class="text-plain mt-4">15.05.2025</div>  ← заменяется
         """
-        if not self.custom_birth_date and not self.custom_passport and not self.custom_fio and not self.custom_gender:
+        if not self.custom_birth_date and not self.custom_passport and not self.custom_fio and not self.custom_gender and not self.custom_inn and not self.custom_snils:
             return
 
         logger.info("Подмена персональных данных в HTML-файлах...")
@@ -518,6 +579,28 @@ class GosuslugiLoader:
                         value_div.string = self.custom_issue_date
                         logger.info("  [%s] Дата выдачи: %s → %s",
                                     page_info['local_name'], old_date, self.custom_issue_date)
+                        changes_made += 1
+
+            # ── Замена СНИЛС ──
+            if self.custom_snils:
+                for snils_card in soup.find_all('lk-snils-card'):
+                    p_tag = snils_card.find('p', class_='title-h5')
+                    if p_tag:
+                        old_snils = p_tag.get_text(strip=True)
+                        p_tag.string = self.custom_snils
+                        logger.info("  [%s] СНИЛС: %s → %s",
+                                    page_info['local_name'], old_snils, self.custom_snils)
+                        changes_made += 1
+
+            # ── Замена ИНН ──
+            if self.custom_inn:
+                for inn_card in soup.find_all('lk-inn-card'):
+                    p_tag = inn_card.find('p', class_='title-h5')
+                    if p_tag:
+                        old_inn = p_tag.get_text(strip=True)
+                        p_tag.string = self.custom_inn
+                        logger.info("  [%s] ИНН: %s → %s",
+                                    page_info['local_name'], old_inn, self.custom_inn)
                         changes_made += 1
 
             # Сохраняем если были изменения
