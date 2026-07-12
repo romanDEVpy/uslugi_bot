@@ -19,20 +19,35 @@ async def my_sites_list(callback: CallbackQuery, user_repo: UserRepository, site
     
     user = await user_repo.get_by_telegram_id(callback.from_user.id)
     if not user:
-        await callback.message.edit_text("❌ Пользователь не найден в базе данных.", reply_markup=inline.get_main_menu())
+        if callback.message.photo:
+            await callback.message.delete()
+            await callback.message.answer("❌ Пользователь не найден в базе данных.", reply_markup=inline.get_main_menu())
+        else:
+            await callback.message.edit_text("❌ Пользователь не найден в базе данных.", reply_markup=inline.get_main_menu())
         return
 
     active_sites = await site_repo.get_active_by_user(user.id)
     if not active_sites:
         text = await setting_repo.get("msg_my_sites_empty", DEFAULT_MESSAGES["msg_my_sites_empty"])
-        await callback.message.edit_text(text=text, reply_markup=inline.get_main_menu())
+        if callback.message.photo:
+            await callback.message.delete()
+            await callback.message.answer(text=text, reply_markup=inline.get_main_menu())
+        else:
+            await callback.message.edit_text(text=text, reply_markup=inline.get_main_menu())
         return
 
     text = await setting_repo.get("msg_my_sites_list", DEFAULT_MESSAGES["msg_my_sites_list"])
-    await callback.message.edit_text(
-        text=text,
-        reply_markup=inline.get_sites_list_keyboard(active_sites)
-    )
+    if callback.message.photo:
+        await callback.message.delete()
+        await callback.message.answer(
+            text=text,
+            reply_markup=inline.get_sites_list_keyboard(active_sites)
+        )
+    else:
+        await callback.message.edit_text(
+            text=text,
+            reply_markup=inline.get_sites_list_keyboard(active_sites)
+        )
 
 
 @router.callback_query(F.data.startswith("view_site_"))

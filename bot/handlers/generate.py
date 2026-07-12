@@ -16,11 +16,19 @@ router = Router()
 async def choose_plan(callback: CallbackQuery, setting_repo: SettingRepository):
     await callback.answer()
     text = await setting_repo.get("msg_choose_plan", DEFAULT_MESSAGES["msg_choose_plan"])
-    await callback.message.edit_text(
-        text=text,
-        parse_mode="Markdown",
-        reply_markup=inline.get_plans_keyboard()
-    )
+    if callback.message.photo:
+        await callback.message.delete()
+        await callback.message.answer(
+            text=text,
+            parse_mode="Markdown",
+            reply_markup=inline.get_plans_keyboard()
+        )
+    else:
+        await callback.message.edit_text(
+            text=text,
+            parse_mode="Markdown",
+            reply_markup=inline.get_plans_keyboard()
+        )
 
 
 @router.callback_query(F.data.startswith("plan_"))
