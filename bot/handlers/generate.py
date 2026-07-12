@@ -204,17 +204,27 @@ async def handle_successful_payment(bot: Bot, chat_id: int, order, order_repo: O
                     
                     setting_repo = SettingRepository(order_repo.session)
                     text = await setting_repo.get("msg_successful_payment", DEFAULT_MESSAGES["msg_successful_payment"])
+                    help_photo = await setting_repo.get("help_photo")
                     
                     builder = InlineKeyboardBuilder()
                     builder.button(text="🚀 Генерация сайта", url=auth_url)
                     builder.adjust(1)
                     
-                    await bot.send_message(
-                        chat_id=chat_id,
-                        text=text,
-                        parse_mode="Markdown",
-                        reply_markup=builder.as_markup()
-                    )
+                    if help_photo:
+                        await bot.send_photo(
+                            chat_id=chat_id,
+                            photo=help_photo,
+                            caption=text,
+                            parse_mode="Markdown",
+                            reply_markup=builder.as_markup()
+                        )
+                    else:
+                        await bot.send_message(
+                            chat_id=chat_id,
+                            text=text,
+                            parse_mode="Markdown",
+                            reply_markup=builder.as_markup()
+                        )
                 else:
                     logger.error(f"Auth server returned error {resp.status}: {await resp.text()}")
                     await bot.send_message(
