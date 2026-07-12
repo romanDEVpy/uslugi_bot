@@ -79,22 +79,16 @@ async def cmd_admin(message: Message, user_repo: UserRepository):
 async def back_to_menu(callback: CallbackQuery, setting_repo: SettingRepository):
     await callback.answer()
     welcome_msg = await setting_repo.get("msg_back_to_menu", DEFAULT_MESSAGES["msg_back_to_menu"])
-    
     welcome_photo = await setting_repo.get("welcome_photo")
+    
     if welcome_photo:
-        if callback.message.photo:
-            await callback.message.edit_caption(
-                caption=welcome_msg,
-                reply_markup=inline.get_main_menu()
-            )
-        else:
-            await callback.message.delete()
-            await callback.message.answer_photo(
-                photo=welcome_photo,
-                caption=welcome_msg,
-                parse_mode="Markdown",
-                reply_markup=inline.get_main_menu()
-            )
+        await callback.message.delete()
+        await callback.message.answer_photo(
+            photo=welcome_photo,
+            caption=welcome_msg,
+            parse_mode="Markdown",
+            reply_markup=inline.get_main_menu()
+        )
     else:
         if callback.message.photo:
             await callback.message.delete()
@@ -116,20 +110,15 @@ async def callback_help(callback: CallbackQuery, setting_repo: SettingRepository
     
     help_msg = await setting_repo.get("msg_help", DEFAULT_MESSAGES["msg_help"])
     help_photo = await setting_repo.get("help_photo")
+    
     if help_photo:
-        if callback.message.photo:
-            await callback.message.edit_caption(
-                caption=help_msg,
-                reply_markup=inline.get_main_menu()
-            )
-        else:
-            await callback.message.delete()
-            await callback.message.answer_photo(
-                photo=help_photo,
-                caption=help_msg,
-                parse_mode="Markdown",
-                reply_markup=inline.get_main_menu()
-            )
+        await callback.message.delete()
+        await callback.message.answer_photo(
+            photo=help_photo,
+            caption=help_msg,
+            parse_mode="Markdown",
+            reply_markup=inline.get_main_menu()
+        )
     else:
         if callback.message.photo:
             await callback.message.delete()
