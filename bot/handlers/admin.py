@@ -4,9 +4,10 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.filters import Command, CommandObject
 from bot.keyboards import inline
-from bot.db.repositories import UserRepository, OrderRepository, HostedSiteRepository
+from bot.db.repositories import UserRepository, OrderRepository, HostedSiteRepository, SettingRepository
 from sqlalchemy import select, func
 from bot.db.models import User, Order, HostedSite
+from bot.config import DEFAULT_MESSAGES
 import logging
 
 logger = logging.getLogger(__name__)
@@ -14,6 +15,9 @@ router = Router()
 
 class AdminStates(StatesGroup):
     waiting_broadcast_msg = State()
+    waiting_welcome_photo = State()
+    waiting_help_photo = State()
+    waiting_message_text = State()
 
 @router.callback_query(F.data == "admin_stats")
 async def show_admin_stats(callback: CallbackQuery, session):
@@ -158,3 +162,251 @@ async def cmd_refund(message: Message, command: CommandObject, bot: Bot, user_re
     except Exception as e:
         logger.error(f"Error performing refund: {e}", exc_info=True)
         await message.answer(f"❌ Ошибка выполнения возврата: {e}")
+
+
+@router.message(Command("cancel"))
+@router.message(F.text.casefold() == "cancel")
+async def cancel_handler(message: Message, state: FSMContext) -> None:
+    """Allow user to cancel any FSM state"""
+    current_state = await state.get_state()
+    if current_state is None:
+        return
+
+    logger.info(f"Cancelling state {current_state}")
+    await state.clear()
+    await message.answer(
+        "❌ Действие отменено.",
+        reply_markup=inline.get_admin_menu()
+    )
+
+
+@router.callback_query(F.data == "cmd_admin_back")
+async def admin_back(callback: CallbackQuery):
+    await callback.answer()
+    
+    if callback.message.photo:
+        await callback.message.delete()
+        await callback.message.answer(
+            "🛠️ **Панель управления администратора**",
+            parse_mode="Markdown",
+            reply_markup=inline.get_admin_menu()
+        )
+    else:
+        await callback.message.edit_text(
+            "🛠️ **Панель управления администратора**",
+            parse_mode="Markdown",
+            reply_markup=inline.get_admin_menu()
+        )
+
+
+@router.callback_query(F.data.in_({"admin_photo_welcome", "admin_photo_help"}))
+async def admin_photo_settings(callback: CallbackQuery, setting_repo: SettingRepository):
+    await callback.answer()
+    setting_name = "welcome" if callback.data == "admin_photo_welcome" else "help"
+    key = "welcome_photo" if setting_name == "welcome" else "help_photo"
+    title = "приветствия" if setting_name == "welcome" else "инструкции"
+    
+    file_id = await setting_repo.get(key)
+    
+    if file_id:
+        text = f"🖼️ **Настройки фото {title}:**\n\nТекущее фото установлено (ID: `{file_id}`). Вы можете обновить его или удалить."
+        await callback.message.delete()
+        await callback.message.answer_photo(
+            photo=file_id,
+            caption=text,
+            parse_mode="Markdown",
+            reply_markup=inline.get_photo_settings_keyboard(setting_name)
+        )
+    else:
+        text = f"🖼️ **Настройки фото {title}:**\n\nТекущее фото **не установлено** (сообщение отправляется в текстовом формате)."
+        if callback.message.photo:
+            await callback.message.delete()
+            await callback.message.answer(
+                text=text,
+                parse_mode="Markdown",
+                reply_markup=inline.get_photo_settings_keyboard(setting_name)
+            )
+        else:
+            await callback.message.edit_text(
+                text=text,
+                parse_mode="Markdown",
+                reply_markup=inline.get_photo_settings_keyboard(setting_name)
+            )
+
+
+@router.callback_query(F.data.startswith("admin_set_photo_"))
+async def admin_set_photo_prompt(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    setting_name = callback.data.split("_")[3]
+    
+    if setting_name == "welcome":
+        await state.set_state(AdminStates.waiting_welcome_photo)
+    else:
+        await state.set_state(AdminStates.waiting_help_photo)
+        
+    title = "приветствия" if setting_name == "welcome" else "инструкции"
+    text = f"📥 **Отправьте изображение для фото {title}:**\n\nИли напишите /cancel для отмены."
+    
+    if callback.message.photo:
+        await callback.message.delete()
+        await callback.message.answer(text=text, parse_mode="Markdown")
+    else:
+        await callback.message.edit_text(text=text, parse_mode="Markdown")
+
+
+@router.callback_query(F.data.startswith("admin_del_photo_"))
+async def admin_del_photo(callback: CallbackQuery, setting_repo: SettingRepository):
+    await callback.answer()
+    setting_name = callback.data.split("_")[3]
+    key = "welcome_photo" if setting_name == "welcome" else "help_photo"
+    title = "приветствия" if setting_name == "welcome" else "инструкции"
+    
+    await setting_repo.set(key, None)
+    
+    text = f"❌ Фото для {title} успешно удалено."
+    
+    if callback.message.photo:
+        await callback.message.delete()
+        await callback.message.answer(
+            text=text,
+            reply_markup=inline.get_photo_settings_keyboard(setting_name)
+        )
+    else:
+        await callback.message.edit_text(
+            text=text,
+            reply_markup=inline.get_photo_settings_keyboard(setting_name)
+        )
+
+
+@router.message(AdminStates.waiting_welcome_photo, F.photo)
+@router.message(AdminStates.waiting_help_photo, F.photo)
+async def process_photo_upload(message: Message, state: FSMContext, setting_repo: SettingRepository):
+    current_state = await state.get_state()
+    setting_name = "welcome" if current_state == AdminStates.waiting_welcome_photo.state else "help"
+    key = "welcome_photo" if setting_name == "welcome" else "help_photo"
+    title = "приветствия" if setting_name == "welcome" else "инструкции"
+    
+    photo = message.photo[-1]
+    file_id = photo.file_id
+    
+    await setting_repo.set(key, file_id)
+    await state.clear()
+    
+    await message.answer(
+        f"✅ **Фото для {title} успешно установлено!**",
+        parse_mode="Markdown",
+        reply_markup=inline.get_photo_settings_keyboard(setting_name)
+    )
+
+
+@router.callback_query(F.data == "admin_edit_texts")
+async def admin_edit_texts_menu(callback: CallbackQuery):
+    await callback.answer()
+    text = "📝 **Управление текстами сообщений бота:**\n\nВыберите из списка ниже сообщение, которое вы хотите отредактировать:"
+    
+    if callback.message.photo:
+        await callback.message.delete()
+        await callback.message.answer(
+            text=text,
+            parse_mode="Markdown",
+            reply_markup=inline.get_messages_editor_keyboard()
+        )
+    else:
+        await callback.message.edit_text(
+            text=text,
+            parse_mode="Markdown",
+            reply_markup=inline.get_messages_editor_keyboard()
+        )
+
+
+@router.callback_query(F.data.startswith("msg_view_"))
+async def admin_view_msg_details(callback: CallbackQuery, setting_repo: SettingRepository):
+    await callback.answer()
+    msg_key = callback.data[9:]
+    
+    current_val = await setting_repo.get(msg_key)
+    default_val = DEFAULT_MESSAGES.get(msg_key, "")
+    
+    desc_map = {
+        "msg_welcome": "Приветственное сообщение при отправке команды /start. Поддерживает плейсхолдер `{first_name}`.",
+        "msg_back_to_menu": "Приветственное сообщение при возвращении в главное меню по инлайн-кнопкам.",
+        "msg_help": "Информационный текст инструкции, отправляемый по команде /help или кнопке «Помощь».",
+        "msg_choose_plan": "Сообщение выбора тарифа (Day, Week, Month).",
+        "msg_successful_payment": "Инструкция по генерации, отправляемая сразу после успешной оплаты.",
+        "msg_my_sites_empty": "Текст, когда у пользователя нет активных сайтов.",
+        "msg_my_sites_list": "Заголовок списка активных копий пользователя."
+    }
+    
+    desc = desc_map.get(msg_key, "Дополнительное сообщение бота.")
+    status = "⚠️ Используется стандартный текст" if current_val is None else "✅ Установлен измененный текст"
+    display_text = current_val if current_val is not None else default_val
+    
+    text = (
+        f"📝 **Сообщение:** `{msg_key}`\n"
+        f"ℹ️ **Назначение:** {desc}\n"
+        f"📊 **Статус:** {status}\n\n"
+        f"--- **Текущий текст:** ---\n"
+        f"{display_text}\n"
+        f"---------------------------\n\n"
+        f"Выберите действие:"
+    )
+    
+    await callback.message.edit_text(
+        text=text,
+        parse_mode="Markdown",
+        reply_markup=inline.get_message_options_keyboard(msg_key)
+    )
+
+
+@router.callback_query(F.data.startswith("msg_reset_"))
+async def admin_reset_msg(callback: CallbackQuery, setting_repo: SettingRepository):
+    await callback.answer()
+    msg_key = callback.data[10:]
+    await setting_repo.set(msg_key, None)
+    
+    await callback.message.edit_text(
+        text=f"🔄 Текст сообщения `{msg_key}` сброшен к стандартному.",
+        reply_markup=inline.get_message_options_keyboard(msg_key)
+    )
+
+
+@router.callback_query(F.data.startswith("msg_edit_"))
+async def admin_edit_msg_prompt(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    msg_key = callback.data[9:]
+    
+    await state.set_state(AdminStates.waiting_message_text)
+    await state.update_data(edit_msg_key=msg_key)
+    
+    text = (
+        f"✍️ **Редактирование сообщения `{msg_key}`**\n\n"
+        f"Отправьте новый текст сообщения в ответ на это сообщение.\n"
+        f"Вы можете использовать Markdown-разметку.\n\n"
+        f"Для отмены отправьте /cancel."
+    )
+    
+    await callback.message.edit_text(
+        text=text,
+        parse_mode="Markdown"
+    )
+
+
+@router.message(AdminStates.waiting_message_text, F.text)
+async def process_msg_text_save(message: Message, state: FSMContext, setting_repo: SettingRepository):
+    state_data = await state.get_data()
+    msg_key = state_data.get("edit_msg_key")
+    
+    if not msg_key:
+        await state.clear()
+        await message.answer("❌ Произошла ошибка. Ключ редактирования не найден.", reply_markup=inline.get_admin_menu())
+        return
+        
+    new_text = message.text.strip()
+    await setting_repo.set(msg_key, new_text)
+    await state.clear()
+    
+    await message.answer(
+        text=f"✅ **Текст сообщения `{msg_key}` успешно обновлен!**",
+        parse_mode="Markdown",
+        reply_markup=inline.get_message_options_keyboard(msg_key)
+    )

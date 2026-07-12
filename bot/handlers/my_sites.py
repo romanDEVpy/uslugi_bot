@@ -2,8 +2,8 @@ from aiogram import Router, F, Bot
 from aiogram.types import CallbackQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from bot.keyboards import inline
-from bot.db.repositories import UserRepository, HostedSiteRepository, OrderRepository
-from bot.config import settings
+from bot.db.repositories import UserRepository, HostedSiteRepository, OrderRepository, SettingRepository
+from bot.config import settings, DEFAULT_MESSAGES
 from bot.handlers.generate import handle_successful_payment
 from bot.payments.stars import send_stars_invoice
 from bot.payments.cryptobot import cryptobot
@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 router = Router()
 
 @router.callback_query(F.data == "btn_my_sites")
-async def my_sites_list(callback: CallbackQuery, user_repo: UserRepository, site_repo: HostedSiteRepository):
+async def my_sites_list(callback: CallbackQuery, user_repo: UserRepository, site_repo: HostedSiteRepository, setting_repo: SettingRepository):
     await callback.answer()
     
     user = await user_repo.get_by_telegram_id(callback.from_user.id)
@@ -24,14 +24,11 @@ async def my_sites_list(callback: CallbackQuery, user_repo: UserRepository, site
 
     active_sites = await site_repo.get_active_by_user(user.id)
     if not active_sites:
-        text = (
-            "📭 У вас пока нет активных офлайн-копий профиля Госуслуг.\n\n"
-            "Вы можете сгенерировать новую копию прямо сейчас!"
-        )
+        text = await setting_repo.get("msg_my_sites_empty", DEFAULT_MESSAGES["msg_my_sites_empty"])
         await callback.message.edit_text(text=text, reply_markup=inline.get_main_menu())
         return
 
-    text = "🌐 **Ваши активные офлайн-копии:**"
+    text = await setting_repo.get("msg_my_sites_list", DEFAULT_MESSAGES["msg_my_sites_list"])
     await callback.message.edit_text(
         text=text,
         reply_markup=inline.get_sites_list_keyboard(active_sites)

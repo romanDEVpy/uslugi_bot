@@ -2,10 +2,10 @@ from aiogram import Router, F, Bot
 from aiogram.types import CallbackQuery, Message, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from bot.keyboards import inline
-from bot.db.repositories import UserRepository, OrderRepository
+from bot.db.repositories import UserRepository, OrderRepository, SettingRepository
 from bot.payments.stars import send_stars_invoice
 from bot.payments.cryptobot import cryptobot
-from bot.config import settings
+from bot.config import settings, DEFAULT_MESSAGES
 import aiohttp
 import logging
 
@@ -13,16 +13,9 @@ logger = logging.getLogger(__name__)
 router = Router()
 
 @router.callback_query(F.data == "btn_generate")
-async def choose_plan(callback: CallbackQuery):
+async def choose_plan(callback: CallbackQuery, setting_repo: SettingRepository):
     await callback.answer()
-    text = (
-        "💳 **Выберите тарифный план:**\n\n"
-        "Каждый тариф включает в себя **1 генерацию** актуального профиля Госуслуг "
-        "и размещение сайта на хостинге на указанный период:\n\n"
-        "• **1 День** — для быстрой сверки или демонстрации.\n"
-        "• **1 Неделя** — оптимально для большинства задач.\n"
-        "• **1 Месяц** — долгосрочный доступ к вашим данным."
-    )
+    text = await setting_repo.get("msg_choose_plan", DEFAULT_MESSAGES["msg_choose_plan"])
     await callback.message.edit_text(
         text=text,
         parse_mode="Markdown",
@@ -201,15 +194,8 @@ async def handle_successful_payment(bot: Bot, chat_id: int, order, order_repo: O
                     session_id = data["session_id"]
                     auth_url = settings.SITE_BASE_URL.replace("/view", f"/auth/{session_id}")
                     
-                    text = (
-                        "🎉 **Оплата успешно получена!**\n\n"
-                        "Мы готовы сгенерировать вашу копию профиля Госуслуг.\n\n"
-                        "👇 **Инструкция:**\n"
-                        "1. Нажмите кнопку **«Генерация сайта»** ниже.\n"
-                        "2. Введите **ФИО** и **дату рождения**.\n"
-                        "3. Дождитесь завершения генерации (обычно несколько секунд).\n\n"
-                        "Когда всё будет готово, я пришлю ссылку на ваш сайт прямо сюда!"
-                    )
+                    setting_repo = SettingRepository(order_repo.session)
+                    text = await setting_repo.get("msg_successful_payment", DEFAULT_MESSAGES["msg_successful_payment"])
                     
                     builder = InlineKeyboardBuilder()
                     builder.button(text="🚀 Генерация сайта", url=auth_url)

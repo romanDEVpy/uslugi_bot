@@ -3,7 +3,7 @@ from typing import List, Optional
 from sqlalchemy import select, update, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
-from bot.db.models import User, Order, HostedSite
+from bot.db.models import User, Order, HostedSite, BotSettings
 
 class UserRepository:
     def __init__(self, session: AsyncSession):
@@ -166,3 +166,29 @@ class HostedSiteRepository:
             site.is_active = True
             await self.session.flush()
         return site
+
+
+class SettingRepository:
+    def __init__(self, session: AsyncSession):
+        self.session = session
+
+    async def get(self, key: str, default: Optional[str] = None) -> Optional[str]:
+        query = select(BotSettings.value).where(BotSettings.key == key)
+        result = await self.session.execute(query)
+        val = result.scalar_one_or_none()
+        return val if val is not None else default
+
+    async def set(self, key: str, value: Optional[str]):
+        if value is None:
+            query = delete(BotSettings).where(BotSettings.key == key)
+            await self.session.execute(query)
+        else:
+            query = select(BotSettings).where(BotSettings.key == key)
+            res = await self.session.execute(query)
+            setting = res.scalar_one_or_none()
+            if setting:
+                setting.value = value
+            else:
+                setting = BotSettings(key=key, value=value)
+                self.session.add(setting)
+            await self.session.flush()

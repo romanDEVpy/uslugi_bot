@@ -55,3 +55,10 @@ class HostedSite(Base):
 
     user: Mapped["User"] = relationship("User", back_populates="hosted_sites")
     order: Mapped["Order"] = relationship("Order", back_populates="hosted_site")
+
+
+class BotSettings(Base):
+    __tablename__ = "bot_settings"
+
+    key: Mapped[str] = mapped_column(String(255), primary_key=True)
+    value: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
