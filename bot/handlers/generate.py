@@ -2,7 +2,7 @@ from aiogram import Router, F, Bot
 from aiogram.types import CallbackQuery, Message, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from bot.keyboards import inline
-from bot.db.repositories import UserRepository, OrderRepository, SettingRepository
+from bot.db.repositories import UserRepository, OrderRepository, SettingRepository, ReferralRepository
 from bot.payments.stars import send_stars_invoice
 from bot.payments.cryptobot import cryptobot
 from bot.config import settings, DEFAULT_MESSAGES
@@ -186,6 +186,67 @@ async def handle_successful_payment(bot: Bot, chat_id: int, order, order_repo: O
     """Initiates authentication session and sends user the login form link."""
     # Update order state to paid (if not done)
     await order_repo.mark_as_paid(order.id)
+    
+    # Process referral rewards
+    try:
+        from bot.db.models import User, ReferralTransaction
+        from sqlalchemy import select
+        
+        user_repo = UserRepository(order_repo.session)
+        user = await user_repo.get_by_telegram_id(chat_id)
+        if user and user.referred_by_link_id:
+            referral_repo = ReferralRepository(order_repo.session)
+            link = await referral_repo.get_link_by_id(user.referred_by_link_id)
+            if link:
+                # Check if a transaction for this order already exists
+                query = select(ReferralTransaction).where(ReferralTransaction.order_id == order.id)
+                res = await order_repo.session.execute(query)
+                existing_tx = res.scalar_one_or_none()
+                
+                if not existing_tx:
+                    commission_stars = None
+                    commission_crypto = None
+                    
+                    if order.amount_stars is not None:
+                        commission_stars = float(order.amount_stars) * (link.reward_percent / 100.0)
+                    if order.amount_crypto is not None:
+                        commission_crypto = float(order.amount_crypto) * (link.reward_percent / 100.0)
+                    
+                    tx = await referral_repo.create_transaction(
+                        referrer_id=link.referrer_id,
+                        referee_id=user.id,
+                        referral_link_id=link.id,
+                        order_id=order.id,
+                        amount_stars=commission_stars,
+                        amount_crypto=commission_crypto,
+                        crypto_currency=order.crypto_currency
+                    )
+                    logger.info(f"Referral transaction created: {tx.id} for order {order.id} via link {link.code}")
+                    
+                    # Notify referrer if it is a user
+                    if link.referrer_id:
+                        referrer_user = await user_repo.session.get(User, link.referrer_id)
+                        if referrer_user:
+                            referee_name = user.first_name
+                            bonus_text = ""
+                            if commission_stars:
+                                bonus_text += f"{commission_stars:.1f} ⭐"
+                            if commission_crypto:
+                                if bonus_text:
+                                    bonus_text += " / "
+                                bonus_text += f"{commission_crypto:.4f} {order.crypto_currency or 'USD'}"
+                            
+                            notify_text = (
+                                f"🎁 **Вам начислен реферальный бонус!**\n\n"
+                                f"Пользователь {referee_name} оплатил тариф.\n"
+                                f"Ваше вознаграждение: `{bonus_text}`"
+                            )
+                            try:
+                                await bot.send_message(chat_id=referrer_user.telegram_id, text=notify_text, parse_mode="Markdown")
+                            except Exception as ex:
+                                logger.warning(f"Could not notify referrer {referrer_user.telegram_id}: {ex}")
+    except Exception as e:
+        logger.error(f"Error processing referral reward: {e}", exc_info=True)
     
     # Request auth server to create session
     try:

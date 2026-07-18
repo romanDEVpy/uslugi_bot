@@ -1,15 +1,23 @@
+import secrets
 from datetime import datetime, timedelta
 from typing import List, Optional
-from sqlalchemy import select, update, delete
+from sqlalchemy import select, update, delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
-from bot.db.models import User, Order, HostedSite, BotSettings
+from bot.db.models import User, Order, HostedSite, BotSettings, ReferralLink, ReferralTransaction
 
 class UserRepository:
     def __init__(self, session: AsyncSession):
         self.session = session
 
-    async def get_or_create(self, telegram_id: int, first_name: str, username: Optional[str] = None) -> User:
+    async def get_or_create(
+        self,
+        telegram_id: int,
+        first_name: str,
+        username: Optional[str] = None,
+        referred_by_id: Optional[int] = None,
+        referred_by_link_id: Optional[int] = None
+    ) -> User:
         """Retrieves an existing user or creates a new one."""
         query = select(User).where(User.telegram_id == telegram_id)
         result = await self.session.execute(query)
@@ -19,7 +27,9 @@ class UserRepository:
             user = User(
                 telegram_id=telegram_id,
                 first_name=first_name,
-                username=username
+                username=username,
+                referred_by_id=referred_by_id,
+                referred_by_link_id=referred_by_link_id
             )
             self.session.add(user)
             await self.session.flush()
@@ -192,3 +202,124 @@ class SettingRepository:
                 setting = BotSettings(key=key, value=value)
                 self.session.add(setting)
             await self.session.flush()
+
+
+class ReferralRepository:
+    def __init__(self, session: AsyncSession):
+        self.session = session
+
+    async def get_link_by_code(self, code: str) -> Optional[ReferralLink]:
+        query = select(ReferralLink).where(ReferralLink.code == code)
+        res = await self.session.execute(query)
+        return res.scalar_one_or_none()
+
+    async def get_link_by_id(self, link_id: int) -> Optional[ReferralLink]:
+        query = select(ReferralLink).where(ReferralLink.id == link_id)
+        res = await self.session.execute(query)
+        return res.scalar_one_or_none()
+
+    async def get_or_create_user_link(self, user_id: int) -> ReferralLink:
+        query = select(ReferralLink).where(ReferralLink.referrer_id == user_id, ReferralLink.is_custom == False)
+        res = await self.session.execute(query)
+        link = res.scalar_one_or_none()
+        if not link:
+            # generate unique code
+            while True:
+                code = secrets.token_hex(5) # 10 chars
+                check_query = select(ReferralLink).where(ReferralLink.code == code)
+                check_res = await self.session.execute(check_query)
+                if not check_res.scalar_one_or_none():
+                    break
+            link = ReferralLink(code=code, referrer_id=user_id, is_custom=False, reward_percent=10.0) # default 10%
+            self.session.add(link)
+            await self.session.flush()
+        return link
+
+    async def create_custom_link(self, name: str, reward_percent: float, referrer_id: Optional[int] = None) -> ReferralLink:
+        while True:
+            code = secrets.token_hex(5)
+            check_query = select(ReferralLink).where(ReferralLink.code == code)
+            check_res = await self.session.execute(check_query)
+            if not check_res.scalar_one_or_none():
+                break
+        link = ReferralLink(code=code, name=name, referrer_id=referrer_id, reward_percent=reward_percent, is_custom=True)
+        self.session.add(link)
+        await self.session.flush()
+        return link
+
+    async def list_custom_links(self) -> List[ReferralLink]:
+        query = select(ReferralLink).where(ReferralLink.is_custom == True).order_by(ReferralLink.created_at.desc())
+        res = await self.session.execute(query)
+        return list(res.scalars().all())
+
+    async def delete_link(self, link_id: int):
+        query = delete(ReferralLink).where(ReferralLink.id == link_id)
+        await self.session.execute(query)
+        await self.session.flush()
+
+    async def get_referral_stats(self, user_id: int) -> dict:
+        # total referees
+        ref_count_query = select(func.count(User.id)).where(User.referred_by_id == user_id)
+        ref_count_res = await self.session.execute(ref_count_query)
+        total_referees = ref_count_res.scalar_one() or 0
+
+        # total earned stars
+        stars_query = select(func.sum(ReferralTransaction.amount_stars)).where(ReferralTransaction.referrer_id == user_id)
+        stars_res = await self.session.execute(stars_query)
+        total_earned_stars = stars_res.scalar_one() or 0.0
+
+        # total earned crypto
+        crypto_query = select(func.sum(ReferralTransaction.amount_crypto)).where(ReferralTransaction.referrer_id == user_id)
+        crypto_res = await self.session.execute(crypto_query)
+        total_earned_crypto = crypto_res.scalar_one() or 0.0
+
+        return {
+            "total_referees": total_referees,
+            "total_earned_stars": total_earned_stars,
+            "total_earned_crypto": total_earned_crypto
+        }
+
+    async def get_link_stats(self, link_id: int) -> dict:
+        # total referees via this link
+        ref_count_query = select(func.count(User.id)).where(User.referred_by_link_id == link_id)
+        ref_count_res = await self.session.execute(ref_count_query)
+        total_referees = ref_count_res.scalar_one() or 0
+
+        # total earned stars via this link
+        stars_query = select(func.sum(ReferralTransaction.amount_stars)).where(ReferralTransaction.referral_link_id == link_id)
+        stars_res = await self.session.execute(stars_query)
+        total_earned_stars = stars_res.scalar_one() or 0.0
+
+        # total earned crypto via this link
+        crypto_query = select(func.sum(ReferralTransaction.amount_crypto)).where(ReferralTransaction.referral_link_id == link_id)
+        crypto_res = await self.session.execute(crypto_query)
+        total_earned_crypto = crypto_res.scalar_one() or 0.0
+
+        return {
+            "total_referees": total_referees,
+            "total_earned_stars": total_earned_stars,
+            "total_earned_crypto": total_earned_crypto
+        }
+
+    async def create_transaction(
+        self,
+        referrer_id: Optional[int],
+        referee_id: int,
+        referral_link_id: Optional[int],
+        order_id: int,
+        amount_stars: Optional[float] = None,
+        amount_crypto: Optional[float] = None,
+        crypto_currency: Optional[str] = None
+    ) -> ReferralTransaction:
+        tx = ReferralTransaction(
+            referrer_id=referrer_id,
+            referee_id=referee_id,
+            referral_link_id=referral_link_id,
+            order_id=order_id,
+            amount_stars=amount_stars,
+            amount_crypto=amount_crypto,
+            crypto_currency=crypto_currency
+        )
+        self.session.add(tx)
+        await self.session.flush()
+        return tx

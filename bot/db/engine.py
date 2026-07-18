@@ -1,3 +1,4 @@
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from bot.config import settings
 from bot.db.models import Base
@@ -24,6 +25,9 @@ async def init_db():
     try:
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
+            # Add columns for referrals if they do not exist
+            await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by_id INTEGER REFERENCES users(id) ON DELETE SET NULL;"))
+            await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by_link_id INTEGER REFERENCES referral_links(id) ON DELETE SET NULL;"))
         logger.info("Database tables initialized successfully.")
     except Exception as e:
         logger.critical(f"Failed to initialize database: {e}", exc_info=True)

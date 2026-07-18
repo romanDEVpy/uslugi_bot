@@ -4,9 +4,9 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.filters import Command, CommandObject
 from bot.keyboards import inline
-from bot.db.repositories import UserRepository, OrderRepository, HostedSiteRepository, SettingRepository
+from bot.db.repositories import UserRepository, OrderRepository, HostedSiteRepository, SettingRepository, ReferralRepository
 from sqlalchemy import select, func
-from bot.db.models import User, Order, HostedSite
+from bot.db.models import User, Order, HostedSite, ReferralLink
 from bot.config import DEFAULT_MESSAGES
 import logging
 
@@ -18,6 +18,8 @@ class AdminStates(StatesGroup):
     waiting_welcome_photo = State()
     waiting_help_photo = State()
     waiting_message_text = State()
+    waiting_ref_name = State()
+    waiting_ref_percent = State()
 
 @router.callback_query(F.data == "admin_stats")
 async def show_admin_stats(callback: CallbackQuery, session):
@@ -409,4 +411,145 @@ async def process_msg_text_save(message: Message, state: FSMContext, setting_rep
         text=f"✅ **Текст сообщения `{msg_key}` успешно обновлен!**",
         parse_mode="Markdown",
         reply_markup=inline.get_message_options_keyboard(msg_key)
+    )
+
+
+@router.callback_query(F.data == "admin_referrals")
+async def admin_referrals_list(callback: CallbackQuery, referral_repo: ReferralRepository):
+    await callback.answer()
+    links = await referral_repo.list_custom_links()
+    text = (
+        "🔗 **Управление реферальными ссылками:**\n\n"
+        "Здесь отображаются ваши кастомные партнерские ссылки.\n"
+        "Вы можете создавать новые ссылки с уникальным процентом отчислений и отслеживать их детальную статистику."
+    )
+    
+    if callback.message.photo:
+        await callback.message.delete()
+        await callback.message.answer(
+            text=text,
+            parse_mode="Markdown",
+            reply_markup=inline.get_admin_referrals_keyboard(links)
+        )
+    else:
+        await callback.message.edit_text(
+            text=text,
+            parse_mode="Markdown",
+            reply_markup=inline.get_admin_referrals_keyboard(links)
+        )
+
+
+@router.callback_query(F.data.startswith("admin_ref_view_"))
+async def admin_ref_view_details(callback: CallbackQuery, referral_repo: ReferralRepository, bot: Bot):
+    await callback.answer()
+    link_id = int(callback.data.split("_")[3])
+    link = await referral_repo.get_link_by_id(link_id)
+    if not link:
+        await callback.message.answer("❌ Ссылка не найдена.")
+        return
+        
+    stats = await referral_repo.get_link_stats(link_id)
+    bot_info = await bot.get_me()
+    link_url = f"https://t.me/{bot_info.username}?start=ref_{link.code}"
+    
+    text = (
+        f"🔗 **Реферальная ссылка:** `{link.name}`\n\n"
+        f"• **Ссылка:** `{link_url}`\n"
+        f"• **Процент отчислений:** `{link.reward_percent}%`\n"
+        f"• **Дата создания:** `{link.created_at.strftime('%d.%m.%Y %H:%M')}`\n\n"
+        f"📊 **Статистика переходов/оплат:**\n"
+        f"• Всего зарегистрировано: `{stats['total_referees']}`\n"
+        f"• Прибыль в Telegram Stars: `{stats['total_earned_stars']:.1f} ⭐`\n"
+        f"• Прибыль в Crypto: `{stats['total_earned_crypto']:.4f} USD`"
+    )
+    
+    await callback.message.edit_text(
+        text=text,
+        parse_mode="Markdown",
+        reply_markup=inline.get_admin_ref_options_keyboard(link_id)
+    )
+
+
+@router.callback_query(F.data.startswith("admin_ref_delete_"))
+async def admin_ref_delete(callback: CallbackQuery, referral_repo: ReferralRepository):
+    await callback.answer()
+    link_id = int(callback.data.split("_")[3])
+    await referral_repo.delete_link(link_id)
+    
+    # Show list again
+    links = await referral_repo.list_custom_links()
+    
+    await callback.message.answer("✅ Реферальная ссылка успешно удалена.")
+    await callback.message.edit_text(
+        text="🔗 **Управление реферальными ссылками:**\n\nСсылка удалена.",
+        parse_mode="Markdown",
+        reply_markup=inline.get_admin_referrals_keyboard(links)
+    )
+
+
+@router.callback_query(F.data == "admin_ref_create")
+async def admin_ref_create_prompt(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    await state.set_state(AdminStates.waiting_ref_name)
+    
+    text = (
+        "✍️ **Создание реферальной ссылки**\n\n"
+        "Введите название для ссылки (будет видно только вам в панели администратора, например: `Блогер Иван` или `Реклама TG-канал`):"
+    )
+    
+    if callback.message.photo:
+        await callback.message.delete()
+        await callback.message.answer(text=text, parse_mode="Markdown")
+    else:
+        await callback.message.edit_text(text=text, parse_mode="Markdown")
+
+
+@router.message(AdminStates.waiting_ref_name, F.text)
+async def process_ref_name(message: Message, state: FSMContext):
+    name = message.text.strip()
+    if len(name) > 255:
+        await message.answer("❌ Название слишком длинное. Введите название покороче:")
+        return
+        
+    await state.update_data(ref_name=name)
+    await state.set_state(AdminStates.waiting_ref_percent)
+    
+    await message.answer(
+        "💰 **Установите процент прибыли**\n\n"
+        "Введите процент отчислений от оплат приглашенных пользователей (число от 0 до 100, например `15` или `22.5`):"
+    )
+
+
+@router.message(AdminStates.waiting_ref_percent, F.text)
+async def process_ref_percent(message: Message, state: FSMContext, referral_repo: ReferralRepository, bot: Bot):
+    percent_str = message.text.strip().replace(",", ".")
+    try:
+        percent = float(percent_str)
+        if not (0 <= percent <= 100):
+            raise ValueError()
+    except ValueError:
+        await message.answer("❌ Неверный формат числа. Введите число от 0 до 100:")
+        return
+        
+    state_data = await state.get_data()
+    name = state_data.get("ref_name", "Без названия")
+    
+    link = await referral_repo.create_custom_link(name=name, reward_percent=percent)
+    await state.clear()
+    
+    bot_info = await bot.get_me()
+    link_url = f"https://t.me/{bot_info.username}?start=ref_{link.code}"
+    
+    text = (
+        "✅ **Реферальная ссылка успешно создана!**\n\n"
+        f"• **Название:** `{link.name}`\n"
+        f"• **Процент прибыли:** `{link.reward_percent}%`\n"
+        f"• **Ссылка:** `{link_url}`\n\n"
+        "Вы можете поделиться этой ссылкой с партнером. Владельца ссылки невозможно отследить по ее адресу."
+    )
+    
+    await message.answer(
+        text=text,
+        parse_mode="Markdown",
+        reply_markup=inline.get_admin_ref_options_keyboard(link.id)
     )

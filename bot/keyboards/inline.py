@@ -6,8 +6,9 @@ def get_main_menu() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="🚀 Генерировать сайт", callback_data="btn_generate")
     builder.button(text="📋 Мои сайты", callback_data="btn_my_sites")
+    builder.button(text="👥 Рефералы", callback_data="btn_referrals")
     builder.button(text="❓ Помощь", callback_data="btn_help")
-    builder.adjust(1, 2)
+    builder.adjust(1, 2, 1)
     return builder.as_markup()
 
 def get_plans_keyboard() -> InlineKeyboardMarkup:
@@ -63,8 +64,9 @@ def get_admin_menu() -> InlineKeyboardMarkup:
     builder.button(text="🖼️ Фото приветствия", callback_data="admin_photo_welcome")
     builder.button(text="🖼️ Фото инструкции", callback_data="admin_photo_help")
     builder.button(text="📝 Изменить тексты", callback_data="admin_edit_texts")
+    builder.button(text="🔗 Реферальные ссылки", callback_data="admin_referrals")
     builder.button(text="↩️ В меню", callback_data="back_to_menu")
-    builder.adjust(1, 1, 1, 1, 1, 1)
+    builder.adjust(1, 1, 1, 1, 1, 1, 1)
     return builder.as_markup()
 
 def get_photo_settings_keyboard(setting_name: str) -> InlineKeyboardMarkup:
@@ -94,4 +96,25 @@ def get_message_options_keyboard(msg_key: str) -> InlineKeyboardMarkup:
     builder.button(text="🔄 Сбросить на стандартный", callback_data=f"msg_reset_{msg_key}")
     builder.button(text="↩️ Назад", callback_data="admin_edit_texts")
     builder.adjust(1, 1, 1)
+    return builder.as_markup()
+
+
+def get_admin_referrals_keyboard(links) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for link in links:
+        builder.button(
+            text=f"🔗 {link.name or link.code} ({link.reward_percent}%)",
+            callback_data=f"admin_ref_view_{link.id}"
+        )
+    builder.button(text="➕ Создать ссылку", callback_data="admin_ref_create")
+    builder.button(text="↩️ Назад", callback_data="cmd_admin_back")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def get_admin_ref_options_keyboard(link_id: int) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="❌ Удалить ссылку", callback_data=f"admin_ref_delete_{link_id}")
+    builder.button(text="↩️ Назад", callback_data="admin_referrals")
+    builder.adjust(1, 1)
     return builder.as_markup()
